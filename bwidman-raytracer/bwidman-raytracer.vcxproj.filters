@@ -3,4 +3,8 @@
   <ItemGroup>
     <CudaCompile Include="src\Main.cu" />
   </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="src\WorldTypes.hpp" />
+    <ClInclude Include="src\Math.hpp" />
+  </ItemGroup>
 </Project>

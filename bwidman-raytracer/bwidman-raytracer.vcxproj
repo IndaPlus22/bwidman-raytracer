@@ -167,6 +167,7 @@
       </Defines>
       <CompileOut>$(IntDirFullPath)\%(Filename)%(Extension).obj</CompileOut>
       <KeepDir>$(IntDir)</KeepDir>
+      <Optimization>O2</Optimization>
     </CudaCompile>
     <CudaLink>
       <AdditionalLibraryDirectories>$(CudaToolkitBinDir)/crt</AdditionalLibraryDirectories>
@@ -203,6 +204,10 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <CudaCompile Include="src\Main.cu" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="src\Math.hpp" />
+    <ClInclude Include="src\WorldTypes.hpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

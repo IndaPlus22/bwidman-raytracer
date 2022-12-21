@@ -7,21 +7,32 @@
 
 #include <iostream>
 
+#include "Math.hpp"
+#include "WorldTypes.hpp"
+
 #define WIDTH 1280
 #define HEIGHT 720
 
+#define PI 3.1415926535
+
 unsigned int screenTexture;
-cudaGraphicsResource_t cudaImage;
+cudaGraphicsResource_t cudaImage; // Must be global
 
 __global__ void launch_raytracer(cudaSurfaceObject_t screenSurfaceObj, dim3 cell) {
     int threadStartX = blockIdx.x * blockDim.x + threadIdx.x;
     int threadStartY = blockIdx.y * blockDim.y + threadIdx.y;
+
+    constexpr int FOV = PI / 2;
+    int screenZ = (WIDTH / 2) / tan(FOV / 2);
     
-    // Rendering loop
+    // Loop through pixels in designated screen cell
     for (int y = 0; y < cell.y; y++) {
         for (int x = 0; x < cell.x; x++) {
             int screenX = threadStartX * cell.x + x;
             int screenY = threadStartY * cell.y + y;
+
+
+
             surf2Dwrite(make_uchar4(255 * screenX / WIDTH, 255 * screenY / HEIGHT, 0, 255), screenSurfaceObj, screenX * sizeof(uchar4), screenY);
         }
     }
@@ -127,18 +138,31 @@ int main() {
         std::cout << "Failed to register screen texture to cuda" << std::endl;
     }
 
+    double deltaTime = 0;
+    int frameCount = 0;
     // Loop until the user closes the window
     while (!glfwWindowShouldClose(window)) {
+        // Start timer
+        double startTime = glfwGetTime();
+
         // Render here
         glClear(GL_COLOR_BUFFER_BIT);
 
         render();
 
         // Swap front and back buffers
-        glfwSwapBuffers(window);
+        glfwSwapBuffers(window); // Locks FPS to monitor refresh rate
 
         // Poll for and process events
         glfwPollEvents();
+
+        // Stop timer and print FPS if over a second has elapsed since last print
+        deltaTime += glfwGetTime() - startTime;
+        frameCount++;
+        if (deltaTime > 1.0) {
+            std::cout << "FPS: " << frameCount / deltaTime << std::endl;
+            deltaTime = 0; frameCount = 0;
+        }
     }
 
     glfwTerminate();
