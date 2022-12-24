@@ -1,44 +1,123 @@
-﻿#include <GLFW/glfw3.h>
+﻿#define __CUDACC__
+#include <GLFW/glfw3.h>
 
 #include "cuda_runtime.h"
 #include "device_launch_parameters.h"
 #include "cuda_gl_interop.h"
 #include "surface_functions.h"
+#include "surface_indirect_functions.h"
 
 #include <iostream>
 
-#include "Math.hpp"
-#include "WorldTypes.hpp"
+#include "Math.cuh"
+#include "WorldTypes.cuh"
 
 #define WIDTH 1280
 #define HEIGHT 720
 
-#define PI 3.1415926535
-
 unsigned int screenTexture;
 cudaGraphicsResource_t cudaImage; // Must be global
 
-__global__ void launch_raytracer(cudaSurfaceObject_t screenSurfaceObj, dim3 cell) {
-    int threadStartX = blockIdx.x * blockDim.x + threadIdx.x;
-    int threadStartY = blockIdx.y * blockDim.y + threadIdx.y;
+scene allocateScene() {
+    camera hCamera = { ZERO_VEC, 0, PI / 2 };
+    sphere hSpheres[] = {
+        // Position, radius, color
+        { { 0, 0, 6 }, 2, { 200, 0, 0 } },
+    };
+    int hSphereCount = sizeof(hSpheres) / sizeof(sphere);
 
-    constexpr int FOV = PI / 2;
-    int screenZ = (WIDTH / 2) / tan(FOV / 2);
+    camera* dCamera;
+    sphere* dSpheres;
+    int* dSphereCount;
+
+    cudaMalloc(&dCamera, sizeof(hCamera));
+    cudaMemcpy(dCamera, &hCamera, sizeof(hCamera), cudaMemcpyHostToDevice);
+
+    cudaMalloc(&dSpheres, sizeof(hSpheres));
+    cudaMemcpy(dSpheres, &hSpheres, sizeof(hSpheres), cudaMemcpyHostToDevice);
+
+    cudaMalloc(&dSphereCount, sizeof(hSphereCount));
+    cudaMemcpy(dSphereCount, &hSphereCount, sizeof(hSphereCount), cudaMemcpyHostToDevice);
+
+    return { dCamera, dSpheres, dSphereCount };
+}
+
+// Check if camera ray intersects with sphere
+__device__ bool sphereIntersect(ray cameraRay, sphere sphere, color* pixel, vec3d* intersection) {
+    // If you don't have the tex comments extension, good luck reading this
+    //tex:
+    // Sphere equation:
+    // $$(x-p_1)^2 + (y-p_2)^2 + (z-p_3)^2 = r^2$$
+    // Ray equation: $$\vec{r} = \vec{x} + t\vec{v}$$
+    // Input ray into sphere equation:
+    // $$(x_1+tv_1-p_1)^2 + (x_2+tv_2-p_2)^2 + (x_3+tv_3-p_3)^2 = r^2$$
+    // $$(x_1^2 + x_1v_1t - x_1p_1 + x_1v_1t + v_1^2t^2 - v_1p_1t - p_1x_1 - p_1v_1t + p_1^2) + ... - r^2 = 0$$
+    // $$(v_1^2 + v_2^2 + v_3^2)t^2 + (2x_1v_1 - 2p_1v_1 + 2x_2v_2 - 2p_2v_2 + 2x_3v_3 - 2p_3v_3)t + (x_1^2 - 2p_1x_1 + p_1^2 + x_2^2 - 2p_2x_2 + p_2^2 + x_3^2 - 2p_3x_3 + p_3^2 - r^2) = 0$$
+    // $$(v_1^2 + v_2^2 + v_3^2)t^2 + 2(x_1v_1 - p_1v_1 + x_2v_2 - p_2v_2 + x_3v_3 - p_3v_3)t + ((x_1 - p_1)^2 + (x_2 - p_2)^2 + (x_3 - p_3)^2 - r^2) = 0$$
+    // $$(\vec{v} \cdot \vec{v})t^2 + 2((\vec{x} - \vec{p}) \cdot \vec{v})t + ((\vec{x} - \vec{p}) \cdot (\vec{x} - \vec{p}) - r^2) = 0$$
+    // Solve for t with quadratic formula:
+    // $$t = \frac{-b\pm\sqrt{b^2 - 4ac}}{2a}$$
+    // Where:
+    // $$a = \vec{v} \cdot \vec{v}$$
+    // $$b = 2((\vec{x} - \vec{p}) \cdot \vec{v})$$
+    // $$c = (\vec{x} - \vec{p}) \cdot (\vec{x} - \vec{p}) - r^2$$
+    vec3d p = sphere.position;
+    vec3d x = cameraRay.origin;
+    vec3d v = cameraRay.direction;
+
+    float a = dotProduct(v, v);
+    float b = 2 * dotProduct(x - p, v);
+    float c = dotProduct(x - p, x - p) - sphere.radius * sphere.radius;
+
+    float discriminant = b * b - 4 * a * c; // Discriminator of all
+
+    // Negative root => no solutions => no intersection
+    if (discriminant < 0) {
+        return false;
+    }
+
+    float t = (-b - sqrtf(discriminant)) / (2 * a);
+
+    *pixel = sphere.color;
+    *intersection = cameraRay.origin + t * cameraRay.direction;
+    return true;
+}
+
+__device__ color raytrace(ray cameraRay, sphere spheres[], int sphereCount) {
+    color pixel = ZERO_VEC;
+    
+    // Check intersection with all spheres
+    for (int i = 0; i < sphereCount; i++) {
+        vec3d intersection;
+        bool intersected = sphereIntersect(cameraRay, spheres[i], &pixel, &intersection);
+    }
+
+    return pixel;
+}
+
+__global__ void launch_raytracer(cudaSurfaceObject_t screenSurfaceObj, dim3 cell, scene scene) {
+    int pixelStartX = (blockIdx.x * blockDim.x + threadIdx.x) * cell.x;
+    int pixelStartY = (blockIdx.y * blockDim.y + threadIdx.y) * cell.y;
+
+    float screenZ = (WIDTH / 2) / tanf(scene.camera->FOV / 2);
     
     // Loop through pixels in designated screen cell
     for (int y = 0; y < cell.y; y++) {
         for (int x = 0; x < cell.x; x++) {
-            int screenX = threadStartX * cell.x + x;
-            int screenY = threadStartY * cell.y + y;
+            float screenX = pixelStartX + x;
+            float screenY = pixelStartY + y;
 
+            vec3d pixelPosition = { screenX - WIDTH / 2, screenY - HEIGHT / 2, screenZ };
+            ray cameraRay = { scene.camera->position, normalize(pixelPosition) };
 
+            color pixel = raytrace(cameraRay, scene.spheres, *scene.sphereCount);
 
-            surf2Dwrite(make_uchar4(255 * screenX / WIDTH, 255 * screenY / HEIGHT, 0, 255), screenSurfaceObj, screenX * sizeof(uchar4), screenY);
+            surf2Dwrite(make_uchar4(pixel.r, pixel.g, pixel.b, 255), screenSurfaceObj, screenX * sizeof(uchar4), screenY);
         }
     }
 }
 
-void render() {
+void render(scene dScene) {
     cudaError error;
     error = cudaGraphicsMapResources(1, &cudaImage);
 
@@ -68,9 +147,9 @@ void render() {
     // Each thread then handles a 1 * 9 pixel area
     dim3 grid(20, 20); // 20 * 20 blocks
     dim3 block(64, 4); // 64 * 4 threads
-    dim3 cell(1, 9);
+    dim3 cell(1, 9); // Dimensions of pixel cell handled by each thread
 
-    launch_raytracer<<<grid, block>>>(screenSurfaceObj, cell);
+    launch_raytracer<<<grid, block>>>(screenSurfaceObj, cell, dScene);
 
     // Clean up cuda objects
     error = cudaDestroySurfaceObject(screenSurfaceObj);
@@ -138,6 +217,9 @@ int main() {
         std::cout << "Failed to register screen texture to cuda" << std::endl;
     }
 
+    // Allocate the scene on the GPU
+    scene dScene = allocateScene();
+
     double deltaTime = 0;
     int frameCount = 0;
     // Loop until the user closes the window
@@ -148,10 +230,10 @@ int main() {
         // Render here
         glClear(GL_COLOR_BUFFER_BIT);
 
-        render();
+        render(dScene);
 
         // Swap front and back buffers
-        glfwSwapBuffers(window); // Locks FPS to monitor refresh rate
+        glfwSwapBuffers(window);
 
         // Poll for and process events
         glfwPollEvents();
@@ -166,6 +248,11 @@ int main() {
     }
 
     glfwTerminate();
+
+    // Clean up scene
+    cudaFree(dScene.camera);
+    cudaFree(dScene.spheres);
+    cudaFree(dScene.sphereCount);
 
     // cudaDeviceReset must be called before exiting in order for profiling and
     // tracing tools such as Nsight and Visual Profiler to show complete traces.

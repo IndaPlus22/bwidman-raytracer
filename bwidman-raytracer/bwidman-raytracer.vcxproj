@@ -206,8 +206,8 @@
     <CudaCompile Include="src\Main.cu" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="src\Math.hpp" />
-    <ClInclude Include="src\WorldTypes.hpp" />
+    <ClInclude Include="src\Math.cuh" />
+    <ClInclude Include="src\WorldTypes.cuh" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

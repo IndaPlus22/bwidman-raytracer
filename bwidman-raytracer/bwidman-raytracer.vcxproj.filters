@@ -4,7 +4,7 @@
     <CudaCompile Include="src\Main.cu" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="src\WorldTypes.hpp" />
-    <ClInclude Include="src\Math.hpp" />
+    <ClInclude Include="src\WorldTypes.cuh" />
+    <ClInclude Include="src\Math.cuh" />
   </ItemGroup>
 </Project>

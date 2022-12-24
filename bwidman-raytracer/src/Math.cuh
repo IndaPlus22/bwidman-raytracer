@@ -1,9 +1,16 @@
 #pragma once
 #include "host_defines.h"
 
+#define PI 3.1415926535
+#define ZERO_VEC { 0, 0, 0 }
+
 struct vec3d {
-	float x, y, z;
+	union { float x, r; };
+	union { float y, g; };
+	union { float z, b; };
 };
+
+typedef vec3d color;
 
 __device__ __host__ vec3d operator + (vec3d a, vec3d b) {
 	return { a.x + b.x, a.y + b.y, a.z + b.z };
@@ -40,6 +47,6 @@ __device__ __host__ float squaredLength(vec3d v) {
 	return v.x * v.x + v.y * v.y + v.z * v.z;
 }
 
-__device__ __host__ vec3d normalized(vec3d v) {
+__device__ __host__ vec3d normalize(vec3d v) {
 	return (1.0f / length(v)) * v;
 }
