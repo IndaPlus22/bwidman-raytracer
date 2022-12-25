@@ -206,6 +206,7 @@
     <CudaCompile Include="src\Main.cu" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="src\Controls.cuh" />
     <ClInclude Include="src\Math.cuh" />
     <ClInclude Include="src\WorldTypes.cuh" />
   </ItemGroup>

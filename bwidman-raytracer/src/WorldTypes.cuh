@@ -3,7 +3,7 @@
 
 struct camera {
 	vec3d position;
-	float angle;
+	vec3d direction[2]; // Forward and left direction
 	float FOV;
 };
 
@@ -18,9 +18,8 @@ struct sphere {
 	color color;
 };
 
-// Pointers to device memory of scene
 struct scene {
-	camera* camera;
-	sphere* spheres;
-	int* sphereCount;
+	camera camera;
+	sphere* spheres; // Pointer to device memory of spheres
+	int sphereCount;
 };
