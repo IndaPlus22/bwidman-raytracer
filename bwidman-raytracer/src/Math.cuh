@@ -8,8 +8,13 @@
 // Vectors
 //
 
+// 2D
 struct vec2d {
 	float x, y;
+
+	__host__ __device__ vec2d() = default;
+	__host__ __device__ vec2d(float x, float y)
+		: x(x), y(y) {}
 };
 
 __device__ __host__ vec2d operator + (const vec2d& a, const vec2d& b) {
@@ -29,10 +34,15 @@ __device__ __host__ vec2d operator * (float k, const vec2d& v) {
 }
 
 
+// 3D
 struct vec3d {
 	union { float x, r; };
 	union { float y, g; };
 	union { float z, b; };
+
+	__host__ __device__ vec3d() = default;
+	__host__ __device__ vec3d(float x, float y, float z)
+		: x(x), y(y), z(z) {}
 };
 
 typedef vec3d color;
@@ -89,6 +99,7 @@ __device__ __host__ vec3d normalize(const vec3d& v) {
 // Matrices
 //
 
+// 2D
 struct matrix2d {
 	float cell[2][2];
 };
@@ -112,14 +123,72 @@ __device__ __host__ matrix2d rotationMatrix(float angle) {
 }
 
 
+// 3D
 struct matrix3d {
 	float cell[3][3];
 };
 
+__device__ __host__ vec3d row(const matrix3d& a, int row) {
+	return { a.cell[row][0], a.cell[row][1], a.cell[row][2] };
+}
+
+__device__ __host__ vec3d col(const matrix3d& a, int col) {
+	return { a.cell[0][col], a.cell[1][col], a.cell[2][col] };
+}
+
 __device__ __host__ vec3d operator * (const matrix3d& a, const vec3d& x) {
 	return {
-		a.cell[0][0] * x.x + a.cell[0][1] * x.y + a.cell[0][2] * x.z,
-		a.cell[1][0] * x.x + a.cell[1][1] * x.y + a.cell[1][2] * x.z,
-		a.cell[2][0] * x.x + a.cell[2][1] * x.y + a.cell[2][2] * x.z,
+		dotProduct(row(a, 0), x),
+		dotProduct(row(a, 1), x),
+		dotProduct(row(a, 2), x)
+	};
+}
+
+__device__ __host__ matrix3d operator * (const matrix3d& a, const matrix3d& b) {
+	return {
+		{
+			{ dotProduct(row(a, 0), col(b, 0)), dotProduct(row(a, 0), col(b, 1)), dotProduct(row(a, 0), col(b, 2)) },
+			{ dotProduct(row(a, 1), col(b, 0)), dotProduct(row(a, 1), col(b, 1)), dotProduct(row(a, 1), col(b, 2)) },
+			{ dotProduct(row(a, 2), col(b, 0)), dotProduct(row(a, 2), col(b, 1)), dotProduct(row(a, 2), col(b, 2)) }
+		}
+	};
+}
+
+// Rotate around X axis
+__device__ __host__ matrix3d rotationMatrix3DX(float angle) {
+	const float cosAngle = cosf(angle);
+	const float sinAngle = sinf(angle);
+	return {
+		{
+			{ 1, 0,		   0 },
+			{ 0, cosAngle, -sinAngle },
+			{ 0, sinAngle, cosAngle }
+		}
+	};
+}
+
+// Rotate around Y axis
+__device__ __host__ matrix3d rotationMatrix3DY(float angle) {
+	const float cosAngle = cosf(angle);
+	const float sinAngle = sinf(angle);
+	return {
+		{
+			{ cosAngle,  0, sinAngle },
+			{ 0,		 1, 0 },
+			{ -sinAngle, 0, cosAngle }
+		}
+	};
+}
+
+// Rotate around Z axis
+__device__ __host__ matrix3d rotationMatrix3DZ(float angle) {
+	const float cosAngle = cosf(angle);
+	const float sinAngle = sinf(angle);
+	return {
+		{
+			{ cosAngle, -sinAngle, 0 },
+			{ sinAngle, cosAngle,  0 },
+			{ 0,		0,		   1 }
+		}
 	};
 }

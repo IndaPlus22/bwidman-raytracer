@@ -4,6 +4,7 @@
 struct camera {
 	vec3d position;
 	vec3d direction[2]; // Forward and left direction
+	float angle[2];
 	float FOV;
 };
 

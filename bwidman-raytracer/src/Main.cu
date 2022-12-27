@@ -6,8 +6,6 @@
 #include "cuda_runtime.h"
 #include "device_launch_parameters.h"
 #include "cuda_gl_interop.h"
-//#include "surface_functions.h"
-//#include "surface_indirect_functions.h"
 
 #include <iostream>
 
@@ -22,7 +20,7 @@ unsigned int screenTexture;
 cudaGraphicsResource_t cudaImage; // Must be global
 
 scene allocateScene() {
-    camera hCamera = { ZERO_VEC, { { 0, 0, 1 }, { 1, 0, 0 } }, PI / 2 };
+    camera hCamera = { ZERO_VEC, { { 0, 0, 1 }, { 1, 0, 0 } }, 0, 0, PI / 2 };
     sphere hSpheres[] = {
         // Position, radius, color
         { { 2, 0, 8 }, 2, { 200, 50, 0 } },
@@ -39,7 +37,7 @@ scene allocateScene() {
 }
 
 // Check if camera ray intersects with sphere
-__device__ bool sphereIntersect(ray cameraRay, sphere sphere, color* pixel, vec3d* intersection) {
+__device__ bool sphereIntersect(ray cameraRay, sphere sphere, color* pixel, vec3d* intersection, float* closestHit) {
     // If you don't have the tex comments extension, good luck reading this
     //tex:
     // Sphere equation:
@@ -76,6 +74,12 @@ __device__ bool sphereIntersect(ray cameraRay, sphere sphere, color* pixel, vec3
     // smallest value of t and is therefore the closest to the camera
     float t = (-b - sqrtf(discriminant)) / (2 * a);
 
+    // Behind camera or further away than the so far closest hit
+    if (t < 0 || t > *closestHit) {
+        return false;
+    }
+
+    *closestHit = t;
     *pixel = sphere.color;
     *intersection = cameraRay.origin + t * cameraRay.direction;
     return true;
@@ -83,27 +87,30 @@ __device__ bool sphereIntersect(ray cameraRay, sphere sphere, color* pixel, vec3
 
 __device__ color raytrace(ray cameraRay, sphere spheres[], int sphereCount) {
     color pixel = ZERO_VEC;
+    float closestHit = INFINITY; // Gets updated for every new closest hit
     
     // Check intersection with all spheres
     for (int i = 0; i < sphereCount; i++) {
         vec3d intersection;
-        bool intersected = sphereIntersect(cameraRay, spheres[i], &pixel, &intersection);
+        bool intersected = sphereIntersect(cameraRay, spheres[i], &pixel, &intersection, &closestHit);
     }
 
     return pixel;
 }
 
-__global__ void launch_raytracer(cudaSurfaceObject_t screenSurfaceObj, dim3 cell, scene scene, vec3d screenStart, vec3d directionUp) {
+__global__ void launch_raytracer(cudaSurfaceObject_t screenSurfaceObj, dim3 cell, scene scene, float screenZ, matrix3d rotLeft, matrix3d rotUp) {
     int pixelStartX = (blockIdx.x * blockDim.x + threadIdx.x) * cell.x;
     int pixelStartY = (blockIdx.y * blockDim.y + threadIdx.y) * cell.y;
-    
+
     // Loop through pixels in designated screen cell
     for (int y = 0; y < cell.y; y++) {
         for (int x = 0; x < cell.x; x++) {
             float screenX = pixelStartX + x;
             float screenY = pixelStartY + y;
 
-            vec3d pixelPosition = screenStart + screenX * scene.camera.direction[1] + screenY * directionUp;
+            vec3d pixelPosition = { screenX - WIDTH / 2, screenY - HEIGHT / 2, screenZ };
+            pixelPosition = rotLeft * rotUp * pixelPosition; // Rotate to camera's facing direction
+
             ray cameraRay = { scene.camera.position, normalize(pixelPosition) };
 
             color pixel = raytrace(cameraRay, scene.spheres, scene.sphereCount);
@@ -134,10 +141,8 @@ void render(scene scene) {
 
     // Screen coordinate calculations
     float screenZ = (WIDTH / 2) / tanf(scene.camera.FOV / 2);
-    vec3d screenCenter = screenZ * scene.camera.direction[0];
-    vec3d screenOffset = { WIDTH / 2, HEIGHT / 2, 0 };
-    vec3d screenStart = screenCenter - screenOffset;
-    vec3d directionUp = crossProduct(scene.camera.direction[0], scene.camera.direction[1]);
+    matrix3d rotLeft = rotationMatrix3DY(scene.camera.angle[0]);
+    matrix3d rotUp = rotationMatrix3DX(scene.camera.angle[1]);
 
     // Calculate number of threads etc.
     //tex:Number of blocks (number of pixels / (threads/block * pixels/thread)):
@@ -152,7 +157,7 @@ void render(scene scene) {
     dim3 block(64, 4); // 64 * 4 threads
     dim3 cell(1, 9); // Dimensions of pixel cell handled by each thread
 
-    launch_raytracer<<<grid, block>>>(screenSurfaceObj, cell, scene, screenStart, directionUp);
+    launch_raytracer<<<grid, block>>>(screenSurfaceObj, cell, scene, screenZ, rotLeft, rotUp);
 
     // Clean up cuda objects
     error = cudaDestroySurfaceObject(screenSurfaceObj);
