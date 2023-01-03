@@ -67,8 +67,20 @@ __device__ __host__ vec3d operator * (const vec3d& a, const vec3d& b) {
 	return { a.x * b.x, a.y * b.y, a.z * b.z };
 }
 
-__device__ __host__ vec3d operator * (float k, const vec3d& v) {
+__device__ __host__ vec3d operator * (const float k, const vec3d& v) {
 	return { k * v.x, k * v.y, k * v.z };
+}
+
+__device__ __host__ vec3d operator - (const vec3d& v) {
+	return -1 * v;
+}
+
+__device__ __host__ void operator *= (vec3d& a, const vec3d& b) {
+	a = a * b;
+}
+
+__device__ __host__ void operator *= (vec3d& v, const float k) {
+	v = k * v;
 }
 
 __device__ __host__ float dotProduct(const vec3d& a, const vec3d& b) {
@@ -101,13 +113,22 @@ __device__ __host__ vec3d normalize(const vec3d& v) {
 
 // 2D
 struct matrix2d {
-	float cell[2][2];
+	float elements[2][2];
+
+	__device__ __host__ float* operator[] (const int i) {
+		return elements[i];
+	}
+
+	// For const objects
+	__device__ __host__ float const* operator[] (const int i) const {
+		return elements[i];
+	}
 };
 
 __device__ __host__ vec2d operator * (const matrix2d& a, const vec2d& x) {
 	return {
-		a.cell[0][0] * x.x + a.cell[0][1] * x.y,
-		a.cell[1][0] * x.x + a.cell[1][1] * x.y
+		a[0][0] * x.x + a[0][1] * x.y,
+		a[1][0] * x.x + a[1][1] * x.y
 	};
 }
 
@@ -125,31 +146,41 @@ __device__ __host__ matrix2d rotationMatrix(float angle) {
 
 // 3D
 struct matrix3d {
-	float cell[3][3];
+	float elements[3][3];
+
+	__device__ __host__ float* operator[] (const int i) {
+		return elements[i];
+	}
+
+	// For const objects
+	__device__ __host__ float const* operator[] (const int i) const {
+		return elements[i];
+	}
+
+	// Access specific row or column as a vector
+	__device__ __host__ vec3d row(const int row) const {
+		return { elements[row][0], elements[row][1], elements[row][2] };
+	}
+
+	__device__ __host__ vec3d col(const int col) const {
+		return { elements[0][col], elements[1][col], elements[2][col] };
+	}
 };
-
-__device__ __host__ vec3d row(const matrix3d& a, int row) {
-	return { a.cell[row][0], a.cell[row][1], a.cell[row][2] };
-}
-
-__device__ __host__ vec3d col(const matrix3d& a, int col) {
-	return { a.cell[0][col], a.cell[1][col], a.cell[2][col] };
-}
 
 __device__ __host__ vec3d operator * (const matrix3d& a, const vec3d& x) {
 	return {
-		dotProduct(row(a, 0), x),
-		dotProduct(row(a, 1), x),
-		dotProduct(row(a, 2), x)
+		dotProduct(a.row(0), x),
+		dotProduct(a.row(1), x),
+		dotProduct(a.row(2), x)
 	};
 }
 
 __device__ __host__ matrix3d operator * (const matrix3d& a, const matrix3d& b) {
 	return {
 		{
-			{ dotProduct(row(a, 0), col(b, 0)), dotProduct(row(a, 0), col(b, 1)), dotProduct(row(a, 0), col(b, 2)) },
-			{ dotProduct(row(a, 1), col(b, 0)), dotProduct(row(a, 1), col(b, 1)), dotProduct(row(a, 1), col(b, 2)) },
-			{ dotProduct(row(a, 2), col(b, 0)), dotProduct(row(a, 2), col(b, 1)), dotProduct(row(a, 2), col(b, 2)) }
+			{ dotProduct(a.row(0), b.col(0)), dotProduct(a.row(0), b.col(1)), dotProduct(a.row(0), b.col(2)) },
+			{ dotProduct(a.row(1), b.col(0)), dotProduct(a.row(1), b.col(1)), dotProduct(a.row(1), b.col(2)) },
+			{ dotProduct(a.row(2), b.col(0)), dotProduct(a.row(2), b.col(1)), dotProduct(a.row(2), b.col(2)) }
 		}
 	};
 }

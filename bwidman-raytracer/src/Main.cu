@@ -15,29 +15,60 @@
 
 #define WIDTH 1280
 #define HEIGHT 720
+#define MAX_BOUNCES 3
 
 unsigned int screenTexture;
 cudaGraphicsResource_t cudaImage; // Must be global
 
 scene allocateScene() {
-    camera hCamera = { ZERO_VEC, { { 0, 0, 1 }, { 1, 0, 0 } }, 0, 0, PI / 2 };
+    camera camera = { ZERO_VEC, { { 0, 0, 1 }, { 1, 0, 0 } }, 0, 0, PI / 2 };
+
+    light hLights[] = {
+        // Position, color, intensity
+        { { 0, 5, 4 }, { 1, 1, 1 }, 1 },
+        //{ { 0, 5, 4 }, { 1, 1, 1 }, 1 },
+    };
+    int lightCount = sizeof(hLights) / sizeof(light);
+
     sphere hSpheres[] = {
         // Position, radius, color
         { { 2, 0, 8 }, 2, { 200, 50, 0 } },
         { { -2, 0, 6 }, 1, { 50, 0, 200 } },
     };
-    int hSphereCount = sizeof(hSpheres) / sizeof(sphere);
+    int sphereCount = sizeof(hSpheres) / sizeof(sphere);
+
+    // Allocate lights on GPU
+    light* dLights;
+    cudaMalloc(&dLights, sizeof(hLights));
+    cudaMemcpy(dLights, &hLights, sizeof(hLights), cudaMemcpyHostToDevice);
 
     // Allocate spheres on GPU
     sphere* dSpheres;
     cudaMalloc(&dSpheres, sizeof(hSpheres));
     cudaMemcpy(dSpheres, &hSpheres, sizeof(hSpheres), cudaMemcpyHostToDevice);
 
-    return { hCamera, dSpheres, hSphereCount };
+    return { camera, dLights, lightCount, dSpheres, sphereCount };
 }
 
-// Check if camera ray intersects with sphere
-__device__ bool sphereIntersect(ray cameraRay, sphere sphere, color* pixel, vec3d* intersection, float* closestHit) {
+__device__ vec3d reflect(vec3d direction, vec3d normal) {
+    // direction and normal are both normalized so:
+    //tex:$$proj_\vec{n}(\vec{d}) = (\vec{d} \cdot \vec{n})\vec{n}$$
+    return direction - 2 * dotProduct(direction, normal) * normal;
+}
+
+__device__ color shading(color surfaceColor, const scene& scene, vec3d intersection, vec3d normal) {
+    // Calculate shading with every light source
+    for (int i = 0; i < scene.lightCount; i++) {
+        vec3d lightDirection = normalize(scene.lights[i].position - intersection);
+
+        float cosLightAngle = dotProduct(normal, lightDirection);
+        surfaceColor *= cosLightAngle; // Lambert's cosine law
+    }
+    return surfaceColor;
+}
+
+// Check if ray intersects with sphere
+__device__ bool sphereIntersect(ray ray, sphere sphere, vec3d* intersection, float* closestHit) {
     // If you don't have the tex comments extension, good luck reading this
     //tex:
     // Sphere equation:
@@ -56,8 +87,8 @@ __device__ bool sphereIntersect(ray cameraRay, sphere sphere, color* pixel, vec3
     // $$b = 2((\vec{x} - \vec{p}) \cdot \vec{v})$$
     // $$c = (\vec{x} - \vec{p}) \cdot (\vec{x} - \vec{p}) - r^2$$
     vec3d p = sphere.position;
-    vec3d x = cameraRay.origin;
-    vec3d v = cameraRay.direction;
+    vec3d x = ray.origin;
+    vec3d v = ray.direction;
 
     float a = dotProduct(v, v);
     float b = 2 * dotProduct(x - p, v);
@@ -71,34 +102,45 @@ __device__ bool sphereIntersect(ray cameraRay, sphere sphere, color* pixel, vec3
     }
 
     // Only interested in negative solution to the root as it gives the
-    // smallest value of t and is therefore the closest to the camera
+    // smallest value of t and is therefore the closest to the ray origin
     float t = (-b - sqrtf(discriminant)) / (2 * a);
 
-    // Behind camera or further away than the so far closest hit
-    if (t < 0 || t > *closestHit) {
+    // Behind ray, inside ray origin or further away than the so far closest hit
+    if (t <= 0 || t > *closestHit) {
         return false;
     }
 
     *closestHit = t;
-    *pixel = sphere.color;
-    *intersection = cameraRay.origin + t * cameraRay.direction;
+    *intersection = ray.origin + t * ray.direction;
     return true;
 }
 
-__device__ color raytrace(ray cameraRay, sphere spheres[], int sphereCount) {
-    color pixel = ZERO_VEC;
+__device__ color raytrace(ray incidentRay, const scene& scene, int bounces = 0) {
+    color surfaceColor = ZERO_VEC;
+    if (bounces > MAX_BOUNCES)
+        return surfaceColor;
+
     float closestHit = INFINITY; // Gets updated for every new closest hit
     
     // Check intersection with all spheres
-    for (int i = 0; i < sphereCount; i++) {
+    for (int i = 0; i < scene.sphereCount; i++) {
         vec3d intersection;
-        bool intersected = sphereIntersect(cameraRay, spheres[i], &pixel, &intersection, &closestHit);
+        bool intersected = sphereIntersect(incidentRay, scene.spheres[i], &intersection, &closestHit);
+
+        if (intersected) {
+            vec3d normal = normalize(intersection - scene.spheres[i].position);
+            surfaceColor = shading(scene.spheres[i].color, scene, intersection, normal);
+
+            // Reflect
+            ray reflectionRay = { intersection, reflect(incidentRay.direction, normal) };
+            surfaceColor += raytrace(reflectionRay, scene, bounces + 1);
+        }
     }
 
-    return pixel;
+    return surfaceColor;
 }
 
-__global__ void launch_raytracer(cudaSurfaceObject_t screenSurfaceObj, dim3 cell, scene scene, float screenZ, matrix3d rotLeft, matrix3d rotUp) {
+__global__ void launch_raytracer(cudaSurfaceObject_t screenSurfaceObj, dim3 cell, const scene scene, float screenZ, matrix3d rotLeft, matrix3d rotUp) {
     int pixelStartX = (blockIdx.x * blockDim.x + threadIdx.x) * cell.x;
     int pixelStartY = (blockIdx.y * blockDim.y + threadIdx.y) * cell.y;
 
@@ -113,7 +155,7 @@ __global__ void launch_raytracer(cudaSurfaceObject_t screenSurfaceObj, dim3 cell
 
             ray cameraRay = { scene.camera.position, normalize(pixelPosition) };
 
-            color pixel = raytrace(cameraRay, scene.spheres, scene.sphereCount);
+            color pixel = raytrace(cameraRay, scene);
 
             surf2Dwrite(make_uchar4(pixel.r, pixel.g, pixel.b, 255), screenSurfaceObj, screenX * sizeof(uchar4), screenY);
         }
@@ -183,8 +225,6 @@ void render(scene scene) {
 }
 
 int main() {
-    GLFWwindow* window;
-
     // Initialize GLFW
     if (!glfwInit()) {
         std::cout << "Failed to initialize GLFW!" << std::endl;
@@ -192,8 +232,11 @@ int main() {
         return -1;
     }
 
+    // Window settings
+    glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
+
     // Create a windowed mode window and its OpenGL context
-    window = glfwCreateWindow(WIDTH, HEIGHT, "bwidman-raytracer", NULL, NULL);
+    GLFWwindow* window = glfwCreateWindow(WIDTH, HEIGHT, "bwidman-raytracer", NULL, NULL);
     if (!window) {
         glfwTerminate();
         return -1;

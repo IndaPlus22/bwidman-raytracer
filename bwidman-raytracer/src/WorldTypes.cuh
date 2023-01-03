@@ -19,8 +19,16 @@ struct sphere {
 	color color;
 };
 
+struct light {
+	vec3d position;
+	color color;
+	float intensity;
+};
+
 struct scene {
 	camera camera;
+	light* lights; // Pointer to device memory of lights
+	int lightCount;
 	sphere* spheres; // Pointer to device memory of spheres
 	int sphereCount;
 };
