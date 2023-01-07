@@ -12,8 +12,8 @@
 struct vec2d {
 	float x, y;
 
-	__host__ __device__ vec2d() = default;
-	__host__ __device__ vec2d(float x, float y)
+	__device__ __host__ vec2d() = default;
+	__device__ __host__ vec2d(float x, float y)
 		: x(x), y(y) {}
 };
 
@@ -40,8 +40,8 @@ struct vec3d {
 	union { float y, g; };
 	union { float z, b; };
 
-	__host__ __device__ vec3d() = default;
-	__host__ __device__ vec3d(float x, float y, float z)
+	__device__ __host__ vec3d() = default;
+	__device__ __host__ vec3d(float x, float y, float z)
 		: x(x), y(y), z(z) {}
 };
 

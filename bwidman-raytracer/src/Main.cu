@@ -20,34 +20,62 @@
 unsigned int screenTexture;
 cudaGraphicsResource_t cudaImage; // Must be global
 
+#define CUDA_ARR_COPY(dArr, hArr)\
+    cudaMalloc(&dArr, sizeof(hArr));\
+    cudaMemcpy(dArr, &hArr, sizeof(hArr), cudaMemcpyHostToDevice);\
+
 scene allocateScene() {
-    camera camera = { ZERO_VEC, { { 0, 0, 1 }, { 1, 0, 0 } }, 0, 0, PI / 2 };
+    camera camera = { { 0, 1, 0 }, { 0, 0 } , PI / 2 };
 
     light hLights[] = {
         // Position, color, intensity
-        { { 0, 5, 4 }, { 1, 1, 1 }, 1 },
-        //{ { 0, 5, 4 }, { 1, 1, 1 }, 1 },
+        { { 0, 6, -4 }, { 1, 1, 1 }, 1 },
+        //{ { 0, 6, -4 }, { 1, 1, 1 }, 1 },
     };
     int lightCount = sizeof(hLights) / sizeof(light);
 
     sphere hSpheres[] = {
         // Position, radius, color
-        { { 2, 0, 8 }, 2, { 200, 50, 0 } },
-        { { -2, 0, 6 }, 1, { 50, 0, 200 } },
+        { { 2, 2, -8 }, 2, { 0.8, 0.2, 0 } },
+        { { -2, 1, -6 }, 1, { 0.2, 0, 0.8 } },
     };
     int sphereCount = sizeof(hSpheres) / sizeof(sphere);
 
+    plane hPlanes[] = {
+        // Origin,      directions,                     color
+        { { 0, 0, 0 }, { { 0, 0, 1 }, { 1, 0, 0 } }, { 0.5, 0.5, 0.5 } },
+    };
+    int planeCount = sizeof(hPlanes) / sizeof(plane);
+
+    triangle hTriangles[] = {
+        // Vertices,                                    color
+        { { { -2, 1, -8 }, { 2, 1, -8 }, { 0, 3, -8 } }, { 0.8, 0.2, 0 } },
+    };
+    int triangleCount = sizeof(hTriangles) / sizeof(triangle);
+
     // Allocate lights on GPU
     light* dLights;
-    cudaMalloc(&dLights, sizeof(hLights));
-    cudaMemcpy(dLights, &hLights, sizeof(hLights), cudaMemcpyHostToDevice);
+    CUDA_ARR_COPY(dLights, hLights);
 
     // Allocate spheres on GPU
     sphere* dSpheres;
-    cudaMalloc(&dSpheres, sizeof(hSpheres));
-    cudaMemcpy(dSpheres, &hSpheres, sizeof(hSpheres), cudaMemcpyHostToDevice);
+    CUDA_ARR_COPY(dSpheres, hSpheres);
 
-    return { camera, dLights, lightCount, dSpheres, sphereCount };
+    // Allocate planes on GPU
+    plane* dPlanes;
+    CUDA_ARR_COPY(dPlanes, hPlanes);
+
+    // Allocate triangles on GPU
+    triangle* dTriangles;
+    CUDA_ARR_COPY(dTriangles, hTriangles);
+
+    return { 
+        camera, 
+        dLights, lightCount, 
+        dSpheres, sphereCount, 
+        dPlanes, planeCount,
+        dTriangles, triangleCount 
+    };
 }
 
 __device__ vec3d reflect(vec3d direction, vec3d normal) {
@@ -57,18 +85,72 @@ __device__ vec3d reflect(vec3d direction, vec3d normal) {
 }
 
 __device__ color shading(color surfaceColor, const scene& scene, vec3d intersection, vec3d normal) {
+    color surfaceShading = ZERO_VEC;
+
     // Calculate shading with every light source
     for (int i = 0; i < scene.lightCount; i++) {
         vec3d lightDirection = normalize(scene.lights[i].position - intersection);
 
         float cosLightAngle = dotProduct(normal, lightDirection);
-        surfaceColor *= cosLightAngle; // Lambert's cosine law
+        surfaceShading += (cosLightAngle * surfaceColor); // Lambert's cosine law
     }
-    return surfaceColor;
+    return surfaceShading;
+}
+
+// Check if ray intersects with plane
+__device__ bool planeIntersect(ray ray, plane plane, vec3d* intersection, float* closestHit, vec3d* closestNormal, color* albedo) {
+    //tex:$$P: ax + by + cz + d = 0$$
+    // Input normal as (a,b,c) and plane origin as (x,y,z) into plane equation to solve for d.
+    // $$d = -(ax + by + cz)$$
+    // $$d = - \vec{n} \cdot \vec{x}$$
+    vec3d normal = crossProduct(plane.directions[0], plane.directions[1]);
+
+    // Check if ray is perpendicular to plane normal
+    // In that case the ray is parallel to the plane and no intersection can occur
+    if (dotProduct(normal, ray.direction) == 0) {
+        return false;
+    }
+
+    float d = -dotProduct(normal, plane.origin);
+
+    // To solve ray-plane intersection, input ray coordinates as (x,y,z)
+    //tex:Where: $R = \vec{p} + t\vec{v}$
+    // $$aR_x + bR_y + cR_z + d = 0$$
+    // $$a(p_x + v_xt) + b(p_y + v_yt) + c(p_z + v_zt) + d = 0$$
+    // $$ap_x + av_xt + bp_y + bv_yt + cp_z + cv_zt + d = 0$$
+    // $$(av_x + bv_y + cv_z)t = - (ap_x + bp_y + cp_z + d)$$
+    // $$t = - \frac{ap_x + bp_y + cp_z + d}{av_x + bv_y + cv_z}$$
+    // $$t = - \frac{\vec{n} \cdot \vec{p} + d}{\vec{n} \cdot \vec{v}}$$
+    float t = -(dotProduct(normal, ray.origin) + d) / dotProduct(normal, ray.direction);
+
+    // Behind ray, inside ray origin or further away than the so far closest hit
+    if (t <= 0.0001 || t > *closestHit) {
+        return false;
+    }
+
+    *intersection = ray.origin + t * ray.direction;
+    *closestHit = t;
+    *closestNormal = normal;
+    *albedo = plane.color;
+
+    return true;
+}
+
+// Check if ray intersects with triangle
+__device__ bool triangleIntersect(ray ray, triangle triangle, vec3d* intersection, float* closestHit, vec3d* normal, color* albedo) {
+    vec3d directions[2] = { triangle.vertices[1] - triangle.vertices[0], triangle.vertices[2] - triangle.vertices[0] };
+    plane trianglePlane = { triangle.vertices[0], { directions[0], directions[1] } };
+
+    return false; // Temporary
+
+    bool intersectedPlane = planeIntersect(ray, trianglePlane, intersection, closestHit, normal, albedo);
+
+    *albedo = triangle.color;
+    return true;
 }
 
 // Check if ray intersects with sphere
-__device__ bool sphereIntersect(ray ray, sphere sphere, vec3d* intersection, float* closestHit) {
+__device__ bool sphereIntersect(ray ray, sphere sphere, vec3d* intersection, float* closestHit, vec3d* normal, color* albedo) {
     // If you don't have the tex comments extension, good luck reading this
     //tex:
     // Sphere equation:
@@ -106,35 +188,54 @@ __device__ bool sphereIntersect(ray ray, sphere sphere, vec3d* intersection, flo
     float t = (-b - sqrtf(discriminant)) / (2 * a);
 
     // Behind ray, inside ray origin or further away than the so far closest hit
-    if (t <= 0 || t > *closestHit) {
+    if (t <= 0.0001 || t > *closestHit) {
         return false;
     }
 
     *closestHit = t;
     *intersection = ray.origin + t * ray.direction;
+    *normal = normalize(*intersection - sphere.position);
+    *albedo = sphere.color;
+
     return true;
 }
 
 __device__ color raytrace(ray incidentRay, const scene& scene, int bounces = 0) {
     color surfaceColor = ZERO_VEC;
-    if (bounces > MAX_BOUNCES)
+    if (bounces > MAX_BOUNCES) // Stop recursion
         return surfaceColor;
 
-    float closestHit = INFINITY; // Gets updated for every new closest hit
+    // Gets updated for every new closest hit
+    float closestHit = INFINITY;
+
+    // We want to loop the number of times that is the largest array out of all the objects
+    float largestArraySize = max(scene.sphereCount, max(scene.planeCount, scene.triangleCount));
     
-    // Check intersection with all spheres
-    for (int i = 0; i < scene.sphereCount; i++) {
-        vec3d intersection;
-        bool intersected = sphereIntersect(incidentRay, scene.spheres[i], &intersection, &closestHit);
+    vec3d intersection, normal;
+    color albedo;
+    bool intersected = false;
+    // Check intersection with all objects and shade accordingly
+    for (int i = 0; i < largestArraySize; i++) {
+        // Check index to avoid "index out of range"
+        if (i < scene.sphereCount)
+            intersected += sphereIntersect(incidentRay, scene.spheres[i], &intersection, &closestHit, &normal, &albedo);
 
-        if (intersected) {
-            vec3d normal = normalize(intersection - scene.spheres[i].position);
-            surfaceColor = shading(scene.spheres[i].color, scene, intersection, normal);
+        if (i < scene.planeCount)
+            intersected += planeIntersect(incidentRay, scene.planes[i], &intersection, &closestHit, &normal, &albedo);
 
-            // Reflect
-            ray reflectionRay = { intersection, reflect(incidentRay.direction, normal) };
-            surfaceColor += raytrace(reflectionRay, scene, bounces + 1);
-        }
+        if (i < scene.triangleCount)
+            intersected += triangleIntersect(incidentRay, scene.triangles[i], &intersection, &closestHit, &normal, &albedo);
+    }
+
+    // If intersection was found with any of the objects shade the closest point
+    if (intersected) {
+        color surfaceShading = shading(albedo, scene, intersection, normal);
+
+        // Reflect
+        ray reflectionRay = { intersection, reflect(incidentRay.direction, normal) };
+        color reflection = raytrace(reflectionRay, scene, bounces + 1);
+        surfaceColor = 0.5 * (surfaceShading + reflection);
+        surfaceColor = surfaceShading;
     }
 
     return surfaceColor;
@@ -156,6 +257,7 @@ __global__ void launch_raytracer(cudaSurfaceObject_t screenSurfaceObj, dim3 cell
             ray cameraRay = { scene.camera.position, normalize(pixelPosition) };
 
             color pixel = raytrace(cameraRay, scene);
+            pixel *= 255; // Scale to 0-255
 
             surf2Dwrite(make_uchar4(pixel.r, pixel.g, pixel.b, 255), screenSurfaceObj, screenX * sizeof(uchar4), screenY);
         }
@@ -182,7 +284,7 @@ void render(scene scene) {
         std::cout << "Failed to map screen array to cuda" << std::endl;
 
     // Screen coordinate calculations
-    float screenZ = (WIDTH / 2) / tanf(scene.camera.FOV / 2);
+    float screenZ = -(WIDTH / 2) / tanf(scene.camera.FOV / 2);
     matrix3d rotLeft = rotationMatrix3DY(scene.camera.angle[0]);
     matrix3d rotUp = rotationMatrix3DX(scene.camera.angle[1]);
 
