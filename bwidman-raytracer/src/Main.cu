@@ -1,11 +1,15 @@
 ﻿// Simple GPU accelerated ray tracer
 // Author: Benjamin Widman (benjaneb)
+
+// If you don't have the "tex comments" extension,
+// good luck reading the math derivations
 #define __CUDACC__
 #include <GLFW/glfw3.h>
 
 #include "cuda_runtime.h"
 #include "device_launch_parameters.h"
 #include "cuda_gl_interop.h"
+#include "curand_kernel.h"
 
 #include <iostream>
 
@@ -13,9 +17,13 @@
 #include "WorldTypes.cuh"
 #include "Controls.cuh"
 
-#define WIDTH 1280
-#define HEIGHT 720
-#define MAX_BOUNCES 3
+// Only works with 16:9 aspect ratios, such as:
+// 1280x720, 1920x1080, 2560x1440
+constexpr int windowWidth = 1920;
+constexpr int windowHeight = 1080;
+constexpr bool fullscreen = false;
+constexpr int maxBounces = 3;
+constexpr int samplesPerPixel = 1000;
 
 unsigned int screenTexture;
 cudaGraphicsResource_t cudaImage; // Must be global
@@ -27,35 +35,27 @@ cudaGraphicsResource_t cudaImage; // Must be global
 scene allocateScene() {
     camera camera = { { 0, 1, 0 }, { 0, 0 } , PI / 2 };
 
-    light hLights[] = {
-        // Position, color, intensity
-        { { 0, 6, -4 }, { 1, 1, 1 }, 1 },
-        //{ { 0, 6, -4 }, { 1, 1, 1 }, 1 },
-    };
-    int lightCount = sizeof(hLights) / sizeof(light);
-
     sphere hSpheres[] = {
-        // Position, radius, color
-        { { 2, 2, -8 }, 2, { 0.8, 0.2, 0 } },
-        { { -2, 1, -6 }, 1, { 0.2, 0, 0.8 } },
+        // Position, radius, material
+        { { -5, 6, -4 }, 1, { { 1, 0.6, 0.2 }, 15 } }, // Light left
+        { { 5, 6, -4 }, 1, { { 1, 0.2, 0.6 }, 15 } }, // Light right
+
+        { { 2, 2, -8 }, 2, { { 0.8, 0.2, 0 }, 0 } }, // Right
+        { { -2, 1, -6 }, 1, { { 0.2, 0, 0.8 }, 0 } }, // Left
     };
     int sphereCount = sizeof(hSpheres) / sizeof(sphere);
 
     plane hPlanes[] = {
-        // Origin,      directions,                     color
-        { { 0, 0, 0 }, { { 0, 0, 1 }, { 1, 0, 0 } }, { 0.5, 0.5, 0.5 } },
+        // Origin,      directions,                     material
+        { { 0, 0, 0 }, { { 0, 0, 1 }, { 1, 0, 0 } }, { { 0.5, 0.5, 0.5 }, 0 } },
     };
     int planeCount = sizeof(hPlanes) / sizeof(plane);
 
     triangle hTriangles[] = {
-        // Vertices,                                    color
-        { { { -2, 1, -8 }, { 2, 1, -8 }, { 0, 3, -8 } }, { 0.8, 0.2, 0 } },
+        // Vertices,                                    material
+        { { { -2, 1, -8 }, { 2, 1, -8 }, { 0, 3, -8 } }, { { 0.8, 0.2, 0 }, 0 } },
     };
     int triangleCount = sizeof(hTriangles) / sizeof(triangle);
-
-    // Allocate lights on GPU
-    light* dLights;
-    CUDA_ARR_COPY(dLights, hLights);
 
     // Allocate spheres on GPU
     sphere* dSpheres;
@@ -71,7 +71,6 @@ scene allocateScene() {
 
     return { 
         camera, 
-        dLights, lightCount, 
         dSpheres, sphereCount, 
         dPlanes, planeCount,
         dTriangles, triangleCount 
@@ -84,21 +83,8 @@ __device__ vec3d reflect(vec3d direction, vec3d normal) {
     return direction - 2 * dotProduct(direction, normal) * normal;
 }
 
-__device__ color shading(color surfaceColor, const scene& scene, vec3d intersection, vec3d normal) {
-    color surfaceShading = ZERO_VEC;
-
-    // Calculate shading with every light source
-    for (int i = 0; i < scene.lightCount; i++) {
-        vec3d lightDirection = normalize(scene.lights[i].position - intersection);
-
-        float cosLightAngle = dotProduct(normal, lightDirection);
-        surfaceShading += (cosLightAngle * surfaceColor); // Lambert's cosine law
-    }
-    return surfaceShading;
-}
-
 // Check if ray intersects with plane
-__device__ bool planeIntersect(ray ray, plane plane, vec3d* intersection, float* closestHit, vec3d* closestNormal, color* albedo) {
+__device__ bool planeIntersect(ray ray, plane plane, vec3d* intersection, float* closestHit, vec3d* closestNormal, material* material) {
     //tex:$$P: ax + by + cz + d = 0$$
     // Input normal as (a,b,c) and plane origin as (x,y,z) into plane equation to solve for d.
     // $$d = -(ax + by + cz)$$
@@ -131,27 +117,27 @@ __device__ bool planeIntersect(ray ray, plane plane, vec3d* intersection, float*
     *intersection = ray.origin + t * ray.direction;
     *closestHit = t;
     *closestNormal = normal;
-    *albedo = plane.color;
+    *material = plane.material;
 
     return true;
 }
 
 // Check if ray intersects with triangle
-__device__ bool triangleIntersect(ray ray, triangle triangle, vec3d* intersection, float* closestHit, vec3d* normal, color* albedo) {
+__device__ bool triangleIntersect(ray ray, triangle triangle, vec3d* intersection, float* closestHit, vec3d* normal, material* material) {
     vec3d directions[2] = { triangle.vertices[1] - triangle.vertices[0], triangle.vertices[2] - triangle.vertices[0] };
     plane trianglePlane = { triangle.vertices[0], { directions[0], directions[1] } };
 
-    return false; // Temporary
+    return false;
 
-    bool intersectedPlane = planeIntersect(ray, trianglePlane, intersection, closestHit, normal, albedo);
+    bool intersectedPlane = planeIntersect(ray, trianglePlane, intersection, closestHit, normal, material);
 
-    *albedo = triangle.color;
+
+    *material = triangle.material;
     return true;
 }
 
 // Check if ray intersects with sphere
-__device__ bool sphereIntersect(ray ray, sphere sphere, vec3d* intersection, float* closestHit, vec3d* normal, color* albedo) {
-    // If you don't have the tex comments extension, good luck reading this
+__device__ bool sphereIntersect(ray ray, sphere sphere, vec3d* intersection, float* closestHit, vec3d* normal, material* material) {
     //tex:
     // Sphere equation:
     // $$(x-p_1)^2 + (y-p_2)^2 + (z-p_3)^2 = r^2$$
@@ -195,15 +181,34 @@ __device__ bool sphereIntersect(ray ray, sphere sphere, vec3d* intersection, flo
     *closestHit = t;
     *intersection = ray.origin + t * ray.direction;
     *normal = normalize(*intersection - sphere.position);
-    *albedo = sphere.color;
+    *material = sphere.material;
 
     return true;
 }
 
-__device__ color raytrace(ray incidentRay, const scene& scene, int bounces = 0) {
-    color surfaceColor = ZERO_VEC;
-    if (bounces > MAX_BOUNCES) // Stop recursion
-        return surfaceColor;
+__device__ vec3d genRandomDirection(curandStateXORWOW* randState, vec3d normal) {
+    vec3d randomDirection = ZERO_VEC;
+    do {
+        randomDirection = {
+            float(curand(randState)) / INT_MAX - 1.0f,
+            float(curand(randState)) / INT_MAX - 1.0f,
+            float(curand(randState)) / INT_MAX - 1.0f
+        };
+    } while (length(randomDirection) > 1);
+
+    randomDirection = normalize(randomDirection);
+
+    if (dotProduct(normal, randomDirection) < 0) {
+        // Reflect to other hemisphere by subtracting twice it's projection on the normal
+        randomDirection -= 2 * dotProduct(randomDirection, normal) * normal;
+    }
+    return randomDirection;
+}
+
+__device__ color raytrace(ray incidentRay, const scene& scene, curandStateXORWOW* randState, int bounces = 0) {
+    color outgoingLight = ZERO_VEC;
+    if (bounces > maxBounces) // Stop recursion
+        return outgoingLight;
 
     // Gets updated for every new closest hit
     float closestHit = INFINITY;
@@ -212,65 +217,82 @@ __device__ color raytrace(ray incidentRay, const scene& scene, int bounces = 0) 
     float largestArraySize = max(scene.sphereCount, max(scene.planeCount, scene.triangleCount));
     
     vec3d intersection, normal;
-    color albedo;
+    material material;
     bool intersected = false;
     // Check intersection with all objects and shade accordingly
     for (int i = 0; i < largestArraySize; i++) {
         // Check index to avoid "index out of range"
         if (i < scene.sphereCount)
-            intersected += sphereIntersect(incidentRay, scene.spheres[i], &intersection, &closestHit, &normal, &albedo);
+            intersected += sphereIntersect(incidentRay, scene.spheres[i], &intersection, &closestHit, &normal, &material);
 
         if (i < scene.planeCount)
-            intersected += planeIntersect(incidentRay, scene.planes[i], &intersection, &closestHit, &normal, &albedo);
+            intersected += planeIntersect(incidentRay, scene.planes[i], &intersection, &closestHit, &normal, &material);
 
         if (i < scene.triangleCount)
-            intersected += triangleIntersect(incidentRay, scene.triangles[i], &intersection, &closestHit, &normal, &albedo);
+            intersected += triangleIntersect(incidentRay, scene.triangles[i], &intersection, &closestHit, &normal, &material);
     }
 
     // If intersection was found with any of the objects shade the closest point
     if (intersected) {
-        color surfaceShading = shading(albedo, scene, intersection, normal);
-
         // Reflect
         ray reflectionRay = { intersection, reflect(incidentRay.direction, normal) };
-        color reflection = raytrace(reflectionRay, scene, bounces + 1);
-        surfaceColor = 0.5 * (surfaceShading + reflection);
-        surfaceColor = surfaceShading;
+
+        color emittedLight = material.emmittance * material.albedo;
+        color brdf = 2.0 * material.albedo;
+
+        vec3d randomDirection = genRandomDirection(randState, normal);
+
+        color incomingLight = raytrace({ intersection, randomDirection }, scene, randState, bounces + 1);
+
+        float cosAngle = dotProduct(randomDirection, normal);
+
+        //tex:$$L_o(\omega_o) = L_e(\omega_o) + \int_\Omega f(\omega_i, \omega_o) L_i(\omega_i) (\omega_i \cdot n) d\omega_i$$
+        outgoingLight = emittedLight + brdf * incomingLight * cosAngle;
     }
 
-    return surfaceColor;
+    return outgoingLight;
 }
 
-__global__ void launch_raytracer(cudaSurfaceObject_t screenSurfaceObj, dim3 cell, const scene scene, float screenZ, matrix3d rotLeft, matrix3d rotUp) {
+__global__ void launch_raytracer(cudaSurfaceObject_t screenSurfaceObj, dim3 cell, const scene scene, float screenZ, matrix3d rotLeft, matrix3d rotUp, curandStateXORWOW* randStates) {
     int pixelStartX = (blockIdx.x * blockDim.x + threadIdx.x) * cell.x;
     int pixelStartY = (blockIdx.y * blockDim.y + threadIdx.y) * cell.y;
 
     // Loop through pixels in designated screen cell
     for (int y = 0; y < cell.y; y++) {
         for (int x = 0; x < cell.x; x++) {
-            float screenX = pixelStartX + x;
-            float screenY = pixelStartY + y;
+            int screenX = pixelStartX + x;
+            int screenY = pixelStartY + y;
 
-            vec3d pixelPosition = { screenX - WIDTH / 2, screenY - HEIGHT / 2, screenZ };
+            vec3d pixelPosition = { screenX - windowWidth / 2, screenY - windowHeight / 2, screenZ };
             pixelPosition = rotLeft * rotUp * pixelPosition; // Rotate to camera's facing direction
 
             ray cameraRay = { scene.camera.position, normalize(pixelPosition) };
 
-            color pixel = raytrace(cameraRay, scene);
-            pixel *= 255; // Scale to 0-255
+            curandStateXORWOW* randState = &randStates[screenY * windowWidth + screenX];
+
+            color pixel = ZERO_VEC;
+            // Gather a number of samples and get the average color
+            for (int i = 0; i < samplesPerPixel; i++) {
+                pixel += raytrace(cameraRay, scene, randState);
+            }
+            pixel *= 1.0 / samplesPerPixel;
+
+            // Scale to 0-255 and clamp to 255
+            pixel.x = min(pixel.x * 255, 255.0);
+            pixel.y = min(pixel.y * 255, 255.0);
+            pixel.z = min(pixel.z * 255, 255.0);
 
             surf2Dwrite(make_uchar4(pixel.r, pixel.g, pixel.b, 255), screenSurfaceObj, screenX * sizeof(uchar4), screenY);
         }
     }
 }
 
-void render(scene scene) {
-    cudaError error;
-    error = cudaGraphicsMapResources(1, &cudaImage);
+void render(scene scene, dim3 grid, dim3 block, dim3 cell, curandStateXORWOW* randStates) {
+    cudaGraphicsMapResources(1, &cudaImage);
 
     // Map texture array to cuda
     cudaArray_t screenCudaArray;
-    error = cudaGraphicsSubResourceGetMappedArray(&screenCudaArray, cudaImage, 0, 0);
+    cudaGraphicsSubResourceGetMappedArray(&screenCudaArray, cudaImage, 0, 0);
 
     // Data describing array
     cudaResourceDesc screenArrayDesc;
@@ -279,37 +301,27 @@ void render(scene scene) {
 
     // Create read-/writeable object for screen array
     cudaSurfaceObject_t screenSurfaceObj;
-    error = cudaCreateSurfaceObject(&screenSurfaceObj, &screenArrayDesc);
+    cudaError error = cudaCreateSurfaceObject(&screenSurfaceObj, &screenArrayDesc);
     if (error != cudaSuccess)
         std::cout << "Failed to map screen array to cuda" << std::endl;
 
     // Screen coordinate calculations
-    float screenZ = -(WIDTH / 2) / tanf(scene.camera.FOV / 2);
+    const float screenZ = -(windowWidth / 2) / tanf(scene.camera.FOV / 2);
     matrix3d rotLeft = rotationMatrix3DY(scene.camera.angle[0]);
     matrix3d rotUp = rotationMatrix3DX(scene.camera.angle[1]);
-
-    // Calculate number of threads etc.
-    //tex:Number of blocks (number of pixels / (threads/block * pixels/thread)):
-    //$$\frac{1280*720}{256*9} = 400$$
-    //$$400 = 20*20$$
-    //(both 1280 and 720 are divisible by 20)
     
-    // Hence, we have a 2D grid of 20 * 20 blocks consisting of 256 threads each (good number)
-    // Each block handles a 64 * 36 pixel area
-    // Each thread then handles a 1 * 9 pixel area
-    dim3 grid(20, 20); // 20 * 20 blocks
-    dim3 block(64, 4); // 64 * 4 threads
-    dim3 cell(1, 9); // Dimensions of pixel cell handled by each thread
 
-    launch_raytracer<<<grid, block>>>(screenSurfaceObj, cell, scene, screenZ, rotLeft, rotUp);
+    // Call GPU kernel calculating the color of every pixel
+    launch_raytracer<<<grid, block>>>(screenSurfaceObj, cell, scene, screenZ, rotLeft, rotUp, randStates);
+
 
     // Clean up cuda objects
-    error = cudaDestroySurfaceObject(screenSurfaceObj);
-    error = cudaGraphicsUnmapResources(1, &cudaImage);
+    cudaDestroySurfaceObject(screenSurfaceObj);
+    cudaGraphicsUnmapResources(1, &cudaImage);
 
     error = cudaStreamSynchronize(0); // Synchronize cuda stream 0 (the only one in use)
     if (error != cudaSuccess)
-        std::cout << "Failed to clean up cuda objects and/or synchronize" << std::endl;
+        std::cout << "Failed to synchronize cuda stream" << std::endl;
 
     // Draw screen texture
     glBindTexture(GL_TEXTURE_2D, screenTexture);
@@ -326,29 +338,20 @@ void render(scene scene) {
     glFinish();
 }
 
-int main() {
-    // Initialize GLFW
-    if (!glfwInit()) {
-        std::cout << "Failed to initialize GLFW!" << std::endl;
-        std::cin.get();
-        return -1;
+__global__ void initializeRand(curandStateXORWOW* randStates, dim3 cell) {
+    int pixelStartX = (blockIdx.x * blockDim.x + threadIdx.x) * cell.x;
+    int pixelStartY = (blockIdx.y * blockDim.y + threadIdx.y) * cell.y;
+
+    for (int y = 0; y < cell.y; y++) {
+        for (int x = 0; x < cell.x; x++) {
+            int screenX = pixelStartX + x;
+            int screenY = pixelStartY + y;
+            curand_init(screenY * windowWidth + screenX, 0, 0, &randStates[screenY * windowWidth + screenX]);
+        }
     }
+}
 
-    // Window settings
-    glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
-
-    // Create a windowed mode window and its OpenGL context
-    GLFWwindow* window = glfwCreateWindow(WIDTH, HEIGHT, "bwidman-raytracer", NULL, NULL);
-    if (!window) {
-        glfwTerminate();
-        return -1;
-    }
-
-    // Make the window's context current
-    glfwMakeContextCurrent(window);
-
-    // Set up OpenGL screen texture
-
+cudaError_t setGLScreenTexture() {
     glEnable(GL_TEXTURE_2D);
     glGenTextures(1, &screenTexture);
 
@@ -358,18 +361,77 @@ int main() {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, WIDTH, HEIGHT, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, windowWidth, windowHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
 
     glBindTexture(GL_TEXTURE_2D, 0);
 
     // Register texture and pixel buffer to cuda
     cudaError_t error = cudaGraphicsGLRegisterImage(&cudaImage, screenTexture, GL_TEXTURE_2D, cudaGraphicsRegisterFlagsSurfaceLoadStore);
-    if (error != cudaSuccess) {
-        std::cout << "Failed to register screen texture to cuda" << std::endl;
+    return error;
+}
+
+int main() {
+    GLFWwindow* window;
+
+    // Initialize GLFW
+    if (!glfwInit()) {
+        std::cout << "Failed to initialize GLFW!" << std::endl;
+        std::cin.get();
+        return 1;
     }
+
+    // Window settings
+    glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
+
+    // Create a windowed mode window and its OpenGL context
+    if (fullscreen)
+        window = glfwCreateWindow(windowWidth, windowHeight, "bwidman-raytracer", glfwGetPrimaryMonitor(), NULL);
+    else
+        window = glfwCreateWindow(windowWidth, windowHeight, "bwidman-raytracer", NULL, NULL);
+    if (!window) {
+        glfwTerminate();
+        return 1;
+    }
+
+    // Make the window's context current
+    glfwMakeContextCurrent(window);
+
+    std::cout << "OpenGL version: " << glGetString(GL_VERSION) << std::endl;
+
+    // Set up OpenGL screen texture
+    cudaError_t error = setGLScreenTexture();
+    if (error != cudaSuccess) {
+        std::cout << "Failed to register screen texture to CUDA" << std::endl;
+        return 1;
+    }
+
+    // Calculate number of thread blocks (grid dimensions)
+    //tex:$$Blocks = \frac{pixels}{threads/block * pixels/thread}$$
+    // Example 1280x720:
+    // $$\frac{1280*720}{256*9} = 400$$
+    // Grid width: $\sqrt{400} = 20$
+    // (both 1280 and 720 are divisible by 20)
+    constexpr int threadsPerBlock = 256; // A good number
+    constexpr int pixelsPerThread = 9;
+
+    constexpr int blockAmount = windowWidth * windowHeight / (threadsPerBlock * pixelsPerThread);
+    std::cout << "Using " << blockAmount << " CUDA thread blocks\n" << std::endl;
+
+    const int gridWidth = ceil(sqrtf(blockAmount));
+
+    // We have a 2D grid of gridWidth * gridWidth blocks consisting of 256 threads each
+    // Each block handles a 64 * 36 pixel area
+    // Each thread then handles a 1 * 9 pixel area
+    dim3 grid(gridWidth, gridWidth);
+    dim3 block(64, 4); // 64 * 4 threads (256)
+    dim3 cell(1, 9); // Dimensions of pixel cell handled by each thread
 
     // Allocate the scene on the GPU
     scene scene = allocateScene();
+
+    curandStateXORWOW* randStates;
+    cudaMalloc(&randStates, windowHeight * windowWidth * sizeof(curandStateXORWOW));
+    initializeRand<<<grid, block>>>(randStates, cell);
 
     double deltaTime = 0;
     int frameCount = 0;
@@ -381,12 +443,12 @@ int main() {
         // Render here
         glClear(GL_COLOR_BUFFER_BIT);
 
-        render(scene);
+        render(scene, grid, block, cell, randStates);
 
         // Swap front and back buffers
         glfwSwapBuffers(window);
 
-        controls(window, scene.camera);
+        controls(window, scene.camera, glfwGetTime() - startTime);
 
         // Poll for and process events
         glfwPollEvents();
@@ -395,7 +457,7 @@ int main() {
         deltaTime += glfwGetTime() - startTime;
         frameCount++;
         if (deltaTime > 1.0) {
-            std::cout << "FPS: " << frameCount / deltaTime << std::endl;
+            std::cout << "FPS: " << int(frameCount / deltaTime) << std::endl;
             deltaTime = 0; frameCount = 0;
         }
     }
@@ -404,6 +466,8 @@ int main() {
 
     // Clean up scene
     cudaFree(scene.spheres);
+    cudaFree(scene.planes);
+    cudaFree(scene.triangles);
 
     // cudaDeviceReset must be called before exiting in order for profiling and
     // tracing tools such as Nsight and Visual Profiler to show complete traces.

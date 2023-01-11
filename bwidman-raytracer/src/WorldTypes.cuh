@@ -12,6 +12,11 @@ struct camera {
 	float FOV;
 };
 
+struct material {
+	color albedo;
+	float emmittance;
+};
+
 struct light {
 	vec3d position;
 	color color;
@@ -21,24 +26,22 @@ struct light {
 struct sphere {
 	vec3d position;
 	float radius;
-	color color;
+	material material;
 };
 
 struct plane {
 	vec3d origin;
 	vec3d directions[2];
-	color color;
+	material material;
 };
 
 struct triangle {
 	vec3d vertices[3];
-	color color;
+	material material;
 };
 
 struct scene {
 	camera camera;
-	light* lights; // Pointer to device memory of lights
-	int lightCount;
 	sphere* spheres; // Pointer to device memory of spheres
 	int sphereCount;
 	plane* planes; // Pointer to device memory of planes

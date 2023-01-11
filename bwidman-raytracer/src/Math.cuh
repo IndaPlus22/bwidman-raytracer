@@ -71,6 +71,10 @@ __device__ __host__ vec3d operator * (const float k, const vec3d& v) {
 	return { k * v.x, k * v.y, k * v.z };
 }
 
+__device__ __host__ vec3d operator * (const vec3d& v, const float k) {
+	return { k * v.x, k * v.y, k * v.z };
+}
+
 __device__ __host__ vec3d operator - (const vec3d& v) {
 	return -1 * v;
 }
