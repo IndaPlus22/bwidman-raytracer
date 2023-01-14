@@ -14,7 +14,8 @@ struct camera {
 
 struct material {
 	color albedo;
-	float emmittance;
+	float emittance;
+	float reflectivity;
 };
 
 struct light {
@@ -26,18 +27,18 @@ struct light {
 struct sphere {
 	vec3d position;
 	float radius;
-	material material;
+	material attributes;
 };
 
 struct plane {
 	vec3d origin;
 	vec3d directions[2];
-	material material;
+	material attributes;
 };
 
 struct triangle {
 	vec3d vertices[3];
-	material material;
+	material attributes;
 };
 
 struct scene {

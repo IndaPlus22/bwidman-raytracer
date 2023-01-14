@@ -7,5 +7,6 @@
     <ClInclude Include="src\WorldTypes.cuh" />
     <ClInclude Include="src\Math.cuh" />
     <ClInclude Include="src\Controls.cuh" />
+    <ClInclude Include="src\Intersection.cuh" />
   </ItemGroup>
 </Project>

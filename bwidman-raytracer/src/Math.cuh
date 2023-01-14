@@ -1,5 +1,6 @@
 #pragma once
 #include "host_defines.h"
+#include <math.h>
 
 #define PI 3.1415926535f
 #define ZERO_VEC { 0, 0, 0 }
@@ -51,6 +52,10 @@ __device__ __host__ vec3d operator + (const vec3d& a, const vec3d& b) {
 	return { a.x + b.x, a.y + b.y, a.z + b.z };
 }
 
+__device__ __host__ vec3d operator + (const vec3d& v, const float k) { // Not defined in math but useful
+	return { v.x + k, v.y + k, v.z + k };
+}
+
 __device__ __host__ void operator += (vec3d& a, const vec3d& b) {
 	a = a + b;
 }
@@ -85,6 +90,10 @@ __device__ __host__ void operator *= (vec3d& a, const vec3d& b) {
 
 __device__ __host__ void operator *= (vec3d& v, const float k) {
 	v = k * v;
+}
+
+__device__ __host__ vec3d operator / (const vec3d& a, const vec3d& b) { // Not defined in math but useful
+	return { a.x / b.x, a.y / b.y, a.z / b.z };
 }
 
 __device__ __host__ float dotProduct(const vec3d& a, const vec3d& b) {
@@ -226,4 +235,28 @@ __device__ __host__ matrix3d rotationMatrix3DZ(float angle) {
 			{ 0,		0,		   1 }
 		}
 	};
+}
+
+
+//
+// Color
+//
+
+__device__ color clamp(color color, float k) {
+	return { min(color.x, k), min(color.y, k), min(color.z, k) };
+}
+
+__device__ color gammaCorrection(color color) {
+	return { sqrtf(color.x), sqrtf(color.y), sqrtf(color.z) };
+}
+
+__device__ color acesToneMapping(color color) {
+	// Magical numbers
+	color *= 0.6;
+	constexpr float a = 2.51f;
+	constexpr float b = 0.03f;
+	constexpr float c = 2.43f;
+	constexpr float d = 0.59f;
+	constexpr float e = 0.14f;
+	return clamp(color * (a * color + b) / (color * (c * color + d) + e), 1.0f);
 }

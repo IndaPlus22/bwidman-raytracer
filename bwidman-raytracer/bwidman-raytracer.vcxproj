@@ -110,6 +110,7 @@
       </Defines>
       <CompileOut>$(IntDirFullPath)\%(Filename)%(Extension).obj</CompileOut>
       <KeepDir>$(IntDir)</KeepDir>
+      <GenerateRelocatableDeviceCode>false</GenerateRelocatableDeviceCode>
     </CudaCompile>
     <CudaLink>
       <AdditionalLibraryDirectories>$(CudaToolkitBinDir)/crt</AdditionalLibraryDirectories>
@@ -168,6 +169,7 @@
       <CompileOut>$(IntDirFullPath)\%(Filename)%(Extension).obj</CompileOut>
       <KeepDir>$(IntDir)</KeepDir>
       <Optimization>O2</Optimization>
+      <GenerateRelocatableDeviceCode>false</GenerateRelocatableDeviceCode>
     </CudaCompile>
     <CudaLink>
       <AdditionalLibraryDirectories>$(CudaToolkitBinDir)/crt</AdditionalLibraryDirectories>
@@ -207,6 +209,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\Controls.cuh" />
+    <ClInclude Include="src\Intersection.cuh" />
     <ClInclude Include="src\Math.cuh" />
     <ClInclude Include="src\WorldTypes.cuh" />
   </ItemGroup>
