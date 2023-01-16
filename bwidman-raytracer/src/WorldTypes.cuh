@@ -18,12 +18,6 @@ struct material {
 	float reflectivity;
 };
 
-struct light {
-	vec3d position;
-	color color;
-	float intensity;
-};
-
 struct sphere {
 	vec3d position;
 	float radius;

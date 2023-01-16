@@ -1,16 +1,18 @@
 #pragma once
 #include "WorldTypes.cuh"
 
+constexpr float nearZero = 0.0001;
+
 struct intersectionInfo {
     vec3d intersection;
-    float distance;
+    float distance = INFINITY;
     vec3d normal;
     material attributes;
 };
 
 // Check if ray intersects with a certain object
 
-__device__ bool sphereIntersection(ray ray, sphere sphere, intersectionInfo* closestHit) {
+__device__ bool sphereIntersection(const ray& ray, const sphere& sphere, intersectionInfo* closestHit) {
     //tex:
     // Sphere equation:
     // $$(x-p_1)^2 + (y-p_2)^2 + (z-p_3)^2 = r^2$$
@@ -47,7 +49,7 @@ __device__ bool sphereIntersection(ray ray, sphere sphere, intersectionInfo* clo
     float t = (-b - sqrtf(discriminant)) / (2 * a);
 
     // Behind ray, inside ray origin or further away than the so far closest hit
-    if (t <= 0.0001 || t > closestHit->distance) {
+    if (t <= nearZero || t > closestHit->distance) {
         return false;
     }
 
@@ -59,16 +61,19 @@ __device__ bool sphereIntersection(ray ray, sphere sphere, intersectionInfo* clo
     return true;
 }
 
-__device__ bool planeIntersection(ray ray, plane plane, intersectionInfo* closestHit) {
+__device__ bool planeIntersection(const ray& ray, const plane& plane, intersectionInfo* closestHit) {
     //tex:$$P: ax + by + cz + d = 0$$
     // Input normal as (a,b,c) and plane origin as (x,y,z) into plane equation to solve for d.
     // $$d = -(ax + by + cz)$$
     // $$d = - \vec{n} \cdot \vec{x}$$
     vec3d normal = crossProduct(plane.directions[0], plane.directions[1]);
 
+    float normalDotDirection = dotProduct(normal, ray.direction);
     // Check if ray is perpendicular to plane normal
     // In that case the ray is parallel to the plane and no intersection can occur
-    if (dotProduct(normal, ray.direction) == 0) {
+    // Also check if ray is hitting opposite side of normal
+    // So: |normalDotDirection| < nearZero || normalDotDirection > 0
+    if (normalDotDirection > -nearZero) {
         return false;
     }
 
@@ -82,10 +87,10 @@ __device__ bool planeIntersection(ray ray, plane plane, intersectionInfo* closes
     // $$(av_x + bv_y + cv_z)t = - (ap_x + bp_y + cp_z + d)$$
     // $$t = - \frac{ap_x + bp_y + cp_z + d}{av_x + bv_y + cv_z}$$
     // $$t = - \frac{\vec{n} \cdot \vec{p} + d}{\vec{n} \cdot \vec{v}}$$
-    float t = -(dotProduct(normal, ray.origin) + d) / dotProduct(normal, ray.direction);
+    float t = -(dotProduct(normal, ray.origin) + d) / normalDotDirection;
 
     // Behind ray, inside ray origin or further away than the so far closest hit
-    if (t <= 0.0001 || t > closestHit->distance) {
+    if (t <= nearZero || t > closestHit->distance) {
         return false;
     }
 
@@ -97,7 +102,7 @@ __device__ bool planeIntersection(ray ray, plane plane, intersectionInfo* closes
     return true;
 }
 
-__device__ bool triangleIntersection(ray ray, triangle triangle, intersectionInfo* closestHit) {
+__device__ bool triangleIntersection(const ray& ray, const triangle& triangle, intersectionInfo* closestHit) {
     vec3d edges[3] = { // All edges pointing in a roundabout
         triangle.vertices[1] - triangle.vertices[0], 
         triangle.vertices[2] - triangle.vertices[1], 
@@ -107,10 +112,9 @@ __device__ bool triangleIntersection(ray ray, triangle triangle, intersectionInf
 
     // Check if ray intersects with the plane spanned out by the triangle
     intersectionInfo planeInfo = {};
-    planeInfo.distance = INFINITY;
     bool intersectedPlane = planeIntersection(ray, trianglePlane, &planeInfo);
 
-    if (!intersectedPlane || planeInfo.distance > closestHit->distance) {
+    if (!intersectedPlane || planeInfo.distance <= nearZero || planeInfo.distance > closestHit->distance) {
         return false;
     }
 

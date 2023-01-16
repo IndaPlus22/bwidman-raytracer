@@ -19,12 +19,13 @@
 #include "Controls.cuh"
 
 // Only works with 16:9 aspect ratios, such as:
-// 1280x720, 1920x1080, 2560x1440
-constexpr int windowWidth = 1920;
-constexpr int windowHeight = 1080;
+// 640x360, 960x540, 1280x720, 1920x1080, 2560x1440
+constexpr int windowWidth = 1280;
+constexpr int windowHeight = 720;
 constexpr bool fullscreen = false;
 constexpr int maxBounces = 3;
 constexpr int samplesPerPixel = 1;
+constexpr color backgroundColor = { 0, 0, 0 };
 
 unsigned int screenTexture;
 cudaGraphicsResource_t cudaImage; // Must be global
@@ -57,7 +58,11 @@ scene allocateScene() {
 
     triangle hTriangles[] = {
         // Vertices,                                    material
-        { { { -2, 1, -8 }, { 2, 1, -8 }, { 0, 3, -8 } }, { { 0.8, 0.2, 0 }, 0, 0 } },
+        // Pyramid
+        { { { -2, 0, -3 }, { -1, 0, -3 }, { -1.5, 1, -3.5 } }, { { 0.95, 0.9, 0.2 }, 0, 0 } }, // front
+        { { { -1, 0, -4 }, { -2, 0, -4 }, { -1.5, 1, -3.5 } }, { { 0.95, 0.9, 0.2 }, 0, 0 } }, // back
+        { { { -2, 0, -4 }, { -2, 0, -3 }, { -1.5, 1, -3.5 } }, { { 0.95, 0.9, 0.2 }, 0, 0 } }, // left
+        { { { -1, 0, -3 }, { -1, 0, -4 }, { -1.5, 1, -3.5 } }, { { 0.95, 0.9, 0.2 }, 0, 0 } }, // right
     };
     int triangleCount = sizeof(hTriangles) / sizeof(triangle);
 
@@ -105,13 +110,12 @@ __device__ vec3d genRandomDirection(curandStateXORWOW* randState, vec3d normal) 
 }
 
 __device__ color tracePath(ray incidentRay, const scene& scene, curandStateXORWOW* randState, int bounces = 0) {
-    color outgoingLight = ZERO_VEC;
+    color outgoingLight = backgroundColor;
     if (bounces > maxBounces) // Stop recursion
         return outgoingLight;
 
     // Gets updated for every new closest hit
     intersectionInfo closestHit = {};
-    closestHit.distance = INFINITY;
 
     // We want to loop the number of times that is the largest array out of all the objects
     float largestArraySize = max(scene.sphereCount, max(scene.planeCount, scene.triangleCount));
@@ -152,7 +156,7 @@ __device__ color tracePath(ray incidentRay, const scene& scene, curandStateXORWO
 }
 
 __global__ void launchRaytracer(cudaSurfaceObject_t screenSurfaceObj, dim3 cell, const scene scene, 
-    float screenZ, matrix3d rotLeft, matrix3d rotUp, curandStateXORWOW* randStates, unsigned int accumulatedFrames) {
+    float screenZ, matrix3d rotLeft, matrix3d rotUp, curandStateXORWOW* randStates, unsigned int accumulatedFrames, color* frameSum) {
     int pixelStartX = (blockIdx.x * blockDim.x + threadIdx.x) * cell.x;
     int pixelStartY = (blockIdx.y * blockDim.y + threadIdx.y) * cell.y;
 
@@ -167,32 +171,33 @@ __global__ void launchRaytracer(cudaSurfaceObject_t screenSurfaceObj, dim3 cell,
 
             ray cameraRay = { scene.camera.position, normalize(pixelPosition) };
 
-            curandStateXORWOW* randState = &randStates[screenY * windowWidth + screenX];
+            int pixelIndex = screenY * windowWidth + screenX;
+            curandStateXORWOW* randState = &randStates[pixelIndex];
 
             color pixel = ZERO_VEC;
             // Gather a number of samples and get the average color
             for (int i = 0; i < samplesPerPixel; i++) {
-                pixel += tracePath(cameraRay, scene, randState);
+                pixel = tracePath(cameraRay, scene, randState);
             }
-            pixel *= 1.0 / samplesPerPixel;
+            pixel /= samplesPerPixel;
 
+            if (accumulatedFrames == 1) // Reset accumulated frames
+                frameSum[pixelIndex] = ZERO_VEC;
+
+            frameSum[pixelIndex] += pixel;
+            pixel = frameSum[pixelIndex] / float(accumulatedFrames);
+
+            // Color correction
             pixel = acesToneMapping(pixel);
             pixel = gammaCorrection(pixel);
+
             pixel *= 255; // Scale to fit 0-255
-
-            // Get average between previous pixels
-            uchar4 previousRGBA = surf2Dread<uchar4>(screenSurfaceObj, screenX * sizeof(uchar4), screenY);
-            color previousRGB = { previousRGBA.x, previousRGBA.y, previousRGBA.z };
-
-            pixel = (1.0 / accumulatedFrames) * (previousRGB * (accumulatedFrames - 1) + pixel);
-            pixel = { round(pixel.r), round(pixel.g), round(pixel.b) };
-
-            surf2Dwrite(make_uchar4(pixel.r, pixel.g, pixel.b, 255), screenSurfaceObj, screenX * sizeof(uchar4), screenY);
+            surf2Dwrite(make_uchar4(round(pixel.r), round(pixel.g), round(pixel.b), 255), screenSurfaceObj, screenX * sizeof(uchar4), screenY); // Draw pixel
         }
     }
 }
 
-void render(scene scene, dim3 grid, dim3 block, dim3 cell, curandStateXORWOW* randStates) {
+void render(scene scene, dim3 grid, dim3 block, dim3 cell, curandStateXORWOW* randStates, int accumulatedFrames, color* frameSum) {
     cudaGraphicsMapResources(1, &cudaImage);
 
     // Map texture array to cuda
@@ -217,7 +222,7 @@ void render(scene scene, dim3 grid, dim3 block, dim3 cell, curandStateXORWOW* ra
     
 
     // Call GPU kernel calculating the color of every pixel
-    launchRaytracer<<<grid, block>>>(screenSurfaceObj, cell, scene, screenZ, rotLeft, rotUp, randStates, accumulatedFrames);
+    launchRaytracer<<<grid, block>>>(screenSurfaceObj, cell, scene, screenZ, rotLeft, rotUp, randStates, accumulatedFrames, frameSum);
 
 
     // Clean up cuda objects
@@ -304,8 +309,6 @@ int main() {
 
     std::cout << "OpenGL version: " << glGetString(GL_VERSION) << std::endl;
 
-    glfwSetKeyCallback(window, key_callback);
-
     // Set up OpenGL screen texture
     cudaError_t error = setGLScreenTexture();
     if (error != cudaSuccess) {
@@ -341,35 +344,36 @@ int main() {
     cudaMalloc(&randStates, windowHeight * windowWidth * sizeof(curandStateXORWOW));
     initializeRand<<<grid, block>>>(randStates, cell);
 
+    color* frameSum;
+    cudaMalloc(&frameSum, windowHeight * windowWidth * sizeof(color));
+
+    int accumulatedFrames = 1;
     double deltaTime = 0;
     int frameCount = 0;
     // Loop until the user closes the window
     while (!glfwWindowShouldClose(window)) {
-        // Start timer
-        double startTime = glfwGetTime();
+        double startTime = glfwGetTime(); // Start timer
 
         // Render here
         glClear(GL_COLOR_BUFFER_BIT);
 
-        render(scene, grid, block, cell, randStates);
+        render(scene, grid, block, cell, randStates, accumulatedFrames, frameSum);
 
-        // Swap front and back buffers
-        glfwSwapBuffers(window);
+        glfwSwapBuffers(window); // Swap front and back buffers
+        accumulatedFrames++;
 
-        controls(window, scene.camera, glfwGetTime() - startTime);
+        controls(window, scene.camera, glfwGetTime() - startTime, accumulatedFrames);
 
-        // Poll for and process events
-        glfwPollEvents();
+        glfwPollEvents(); // Poll for and process events
 
         // Stop timer and print FPS if over a second has elapsed since last print
         deltaTime += glfwGetTime() - startTime;
         frameCount++;
-        accumulatedFrames++;
         if (deltaTime > 1.0) {
-            if (frameCount > 1.0)
+            if (frameCount > 1)
                 std::cout << "FPS: " << int(frameCount / deltaTime) << std::endl;
             else 
-                std::cout << "Rendering time: " << int(deltaTime) << std::endl;
+                std::cout << "Rendering time: " << int(deltaTime) << "s\a" << std::endl;
             deltaTime = 0; frameCount = 0;
         }
     }
@@ -380,6 +384,8 @@ int main() {
     cudaFree(scene.spheres);
     cudaFree(scene.planes);
     cudaFree(scene.triangles);
+    cudaFree(randStates);
+    cudaFree(frameSum);
 
     // cudaDeviceReset must be called before exiting in order for profiling and
     // tracing tools such as Nsight and Visual Profiler to show complete traces.

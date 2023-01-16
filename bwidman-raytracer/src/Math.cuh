@@ -12,10 +12,6 @@
 // 2D
 struct vec2d {
 	float x, y;
-
-	__device__ __host__ vec2d() = default;
-	__device__ __host__ vec2d(float x, float y)
-		: x(x), y(y) {}
 };
 
 __device__ __host__ vec2d operator + (const vec2d& a, const vec2d& b) {
@@ -40,10 +36,6 @@ struct vec3d {
 	union { float x, r; };
 	union { float y, g; };
 	union { float z, b; };
-
-	__device__ __host__ vec3d() = default;
-	__device__ __host__ vec3d(float x, float y, float z)
-		: x(x), y(y), z(z) {}
 };
 
 typedef vec3d color;
@@ -94,6 +86,14 @@ __device__ __host__ void operator *= (vec3d& v, const float k) {
 
 __device__ __host__ vec3d operator / (const vec3d& a, const vec3d& b) { // Not defined in math but useful
 	return { a.x / b.x, a.y / b.y, a.z / b.z };
+}
+
+__device__ __host__ vec3d operator / (const vec3d& v, const float k) {
+	return (1.0f / k) * v;
+}
+
+__device__ __host__ void operator /= (vec3d& v, const float k) {
+	v = v / k;
 }
 
 __device__ __host__ float dotProduct(const vec3d& a, const vec3d& b) {
