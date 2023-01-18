@@ -16,6 +16,7 @@ struct material {
 	color albedo;
 	float emittance;
 	float reflectivity;
+	float refractiveIndex;
 };
 
 struct sphere {

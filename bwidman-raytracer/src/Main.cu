@@ -23,8 +23,8 @@
 constexpr int windowWidth = 1280;
 constexpr int windowHeight = 720;
 constexpr bool fullscreen = false;
-constexpr int maxBounces = 3;
-constexpr int samplesPerPixel = 1;
+constexpr int maxBounces = 5;
+constexpr int samplesPerPixel = 2;
 constexpr color backgroundColor = { 0, 0, 0 };
 
 unsigned int screenTexture;
@@ -84,6 +84,22 @@ scene allocateScene() {
     };
 }
 
+__device__ float fresnel(vec3d incident, vec3d normal, float refractionIndex1, float refractionIndex2) {
+    float c = dotProduct(incident, normal);
+    float gRoot = (refractionIndex2 * refractionIndex2) / (refractionIndex1 * refractionIndex1) - 1 + c * c;
+
+    if (gRoot < 0) // Total internal reflection
+        return 1;
+    float g = sqrtf(gRoot);
+
+    return 0.5 * (g - c) * (g - c) / ((g + c) * (g + c)) *
+        (1 + (c * (g + c) - 1) * (c * (g + c) - 1) / ((c * (g - c) + 1) * (c * (g - c) + 1)));
+}
+
+__device__ color diffuseBRDF(vec3d incident, vec3d normal, vec3d scatterDir) {
+    vec3d halfDir = sign(dotProduct(incident, scatterDir)) * (incident + scatterDir);
+}
+
 __device__ vec3d reflect(vec3d direction, vec3d normal) {
     // direction and normal are both normalized so:
     //tex:$$proj_\vec{n}(\vec{d}) = (\vec{d} \cdot \vec{n})\vec{n}$$
@@ -136,13 +152,15 @@ __device__ color tracePath(ray incidentRay, const scene& scene, curandStateXORWO
 
     // If intersection was found with any of the objects shade the closest point
     if (intersected) {
-        ray reflectionRay = { closestHit.intersection, reflect(incidentRay.direction, closestHit.normal) };
+        //ray reflectionRay = { closestHit.intersection, reflect(incidentRay.direction, closestHit.normal) };
 
         color emittedLight = closestHit.attributes.emittance * closestHit.attributes.albedo;
 
-        color brdf = 2.0 * closestHit.attributes.albedo;
-
         vec3d randomDirection = genRandomDirection(randState, closestHit.normal);
+
+        //color brdf = 2.0 * closestHit.attributes.albedo;
+        color brdf = diffuseBRDF(-randomDirection, closestHit.normal, -incidentRay.direction);
+
         color incomingLight = tracePath({ closestHit.intersection, randomDirection }, scene, randState, bounces + 1);
 
         float cosAngle = dotProduct(randomDirection, closestHit.normal);
@@ -165,14 +183,15 @@ __global__ void launchRaytracer(cudaSurfaceObject_t screenSurfaceObj, dim3 cell,
         for (int x = 0; x < cell.x; x++) {
             int screenX = pixelStartX + x;
             int screenY = pixelStartY + y;
+            int pixelIndex = screenY * windowWidth + screenX;
+            curandStateXORWOW* randState = &randStates[pixelIndex];
 
             vec3d pixelPosition = { screenX - windowWidth / 2, screenY - windowHeight / 2, screenZ };
             pixelPosition = rotLeft * rotUp * pixelPosition; // Rotate to camera's facing direction
 
             ray cameraRay = { scene.camera.position, normalize(pixelPosition) };
-
-            int pixelIndex = screenY * windowWidth + screenX;
-            curandStateXORWOW* randState = &randStates[pixelIndex];
+            cameraRay.direction += 0.001 * (windowWidth / 1000) * genRandomDirection(randState, cameraRay.direction); // Jitter for anti-aliasing
+            cameraRay.direction = normalize(cameraRay.direction);
 
             color pixel = ZERO_VEC;
             // Gather a number of samples and get the average color
@@ -188,7 +207,7 @@ __global__ void launchRaytracer(cudaSurfaceObject_t screenSurfaceObj, dim3 cell,
             pixel = frameSum[pixelIndex] / float(accumulatedFrames);
 
             // Color correction
-            pixel = acesToneMapping(pixel);
+            pixel = acesToneMapping(pixel); // Also clamps value to 0-1
             pixel = gammaCorrection(pixel);
 
             pixel *= 255; // Scale to fit 0-255
@@ -371,7 +390,7 @@ int main() {
         frameCount++;
         if (deltaTime > 1.0) {
             if (frameCount > 1)
-                std::cout << "FPS: " << int(frameCount / deltaTime) << std::endl;
+                std::cout << "FPS: " << int(frameCount / deltaTime) << " | Samples: " << accumulatedFrames * samplesPerPixel << std::endl;
             else 
                 std::cout << "Rendering time: " << int(deltaTime) << "s\a" << std::endl;
             deltaTime = 0; frameCount = 0;

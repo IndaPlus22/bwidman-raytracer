@@ -260,3 +260,10 @@ __device__ color acesToneMapping(color color) {
 	constexpr float e = 0.14f;
 	return clamp(color * (a * color + b) / (color * (c * color + d) + e), 1.0f);
 }
+
+//
+// Miscellaneous
+//
+__device__ int sign(float x) {
+	return x / abs(x);
+}
