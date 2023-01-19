@@ -10,6 +10,9 @@ To compile:
 
 ## Example renders (newest to oldest)
 
+### Specular BRDF & importance sampling
+![Specular BRDF](/Renders/07_specular_BRDF.png)
+
 ### Triangle intersection & tone mapping
 ![Edgy pyramid](/Renders/06_edgy_pyramid.png)
 
