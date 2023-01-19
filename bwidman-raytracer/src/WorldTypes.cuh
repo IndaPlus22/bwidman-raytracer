@@ -13,27 +13,32 @@ struct camera {
 };
 
 struct material {
-	color albedo;
-	float emittance;
-	float reflectivity;
-	float refractiveIndex;
+	color albedo = ZERO_VEC;
+	float emittance = 0;
+	float roughness = 1;
+	float refractiveIndex = 1.05;
 };
 
 struct sphere {
 	vec3d position;
 	float radius;
-	material attributes;
+	material mat;
 };
 
 struct plane {
 	vec3d origin;
 	vec3d directions[2];
-	material attributes;
+	material mat;
 };
 
 struct triangle {
 	vec3d vertices[3];
-	material attributes;
+	material mat;
+};
+
+struct quad {
+	vec3d vertices[4];
+	material mat;
 };
 
 struct scene {
@@ -44,4 +49,6 @@ struct scene {
 	int planeCount;
 	triangle* triangles; // Pointer to device memory of triangles
 	int triangleCount;
+	quad* quads; // Pointer to device memory of quads
+	int quadCount;
 };

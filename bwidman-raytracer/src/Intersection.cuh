@@ -7,7 +7,7 @@ struct intersectionInfo {
     vec3d intersection;
     float distance = INFINITY;
     vec3d normal;
-    material attributes;
+    material mat;
 };
 
 // Check if ray intersects with a certain object
@@ -33,9 +33,9 @@ __device__ bool sphereIntersection(const ray& ray, const sphere& sphere, interse
     vec3d x = ray.origin;
     vec3d v = ray.direction;
 
-    float a = dotProduct(v, v);
-    float b = 2 * dotProduct(x - p, v);
-    float c = dotProduct(x - p, x - p) - sphere.radius * sphere.radius;
+    float a = dot(v, v);
+    float b = 2 * dot(x - p, v);
+    float c = dot(x - p, x - p) - sphere.radius * sphere.radius;
 
     float discriminant = b * b - 4 * a * c; // Discriminator of all
 
@@ -56,7 +56,7 @@ __device__ bool sphereIntersection(const ray& ray, const sphere& sphere, interse
     closestHit->distance = t;
     closestHit->intersection = ray.origin + t * ray.direction;
     closestHit->normal = normalize(closestHit->intersection - sphere.position);
-    closestHit->attributes = sphere.attributes;
+    closestHit->mat = sphere.mat;
 
     return true;
 }
@@ -66,18 +66,21 @@ __device__ bool planeIntersection(const ray& ray, const plane& plane, intersecti
     // Input normal as (a,b,c) and plane origin as (x,y,z) into plane equation to solve for d.
     // $$d = -(ax + by + cz)$$
     // $$d = - \vec{n} \cdot \vec{x}$$
-    vec3d normal = crossProduct(plane.directions[0], plane.directions[1]);
+    vec3d normal = cross(plane.directions[0], plane.directions[1]);
 
-    float normalDotDirection = dotProduct(normal, ray.direction);
+    float normalDotDirection = dot(normal, ray.direction);
+
+    // If ray is hitting opposite side of normal, flip it
+    //if (normalDotDirection > nearZero)
+    //    normal = -normal;
+
     // Check if ray is perpendicular to plane normal
     // In that case the ray is parallel to the plane and no intersection can occur
-    // Also check if ray is hitting opposite side of normal
-    // So: |normalDotDirection| < nearZero || normalDotDirection > 0
-    if (normalDotDirection > -nearZero) {
+    if (abs(normalDotDirection) < nearZero) {
         return false;
     }
 
-    float d = -dotProduct(normal, plane.origin);
+    float d = -dot(normal, plane.origin);
 
     // To solve ray-plane intersection, input ray coordinates as (x,y,z)
     //tex:Where: $R = \vec{p} + t\vec{v}$
@@ -87,7 +90,7 @@ __device__ bool planeIntersection(const ray& ray, const plane& plane, intersecti
     // $$(av_x + bv_y + cv_z)t = - (ap_x + bp_y + cp_z + d)$$
     // $$t = - \frac{ap_x + bp_y + cp_z + d}{av_x + bv_y + cv_z}$$
     // $$t = - \frac{\vec{n} \cdot \vec{p} + d}{\vec{n} \cdot \vec{v}}$$
-    float t = -(dotProduct(normal, ray.origin) + d) / normalDotDirection;
+    float t = -(dot(normal, ray.origin) + d) / normalDotDirection;
 
     // Behind ray, inside ray origin or further away than the so far closest hit
     if (t <= nearZero || t > closestHit->distance) {
@@ -97,7 +100,7 @@ __device__ bool planeIntersection(const ray& ray, const plane& plane, intersecti
     closestHit->intersection = ray.origin + t * ray.direction;
     closestHit->distance = t;
     closestHit->normal = normal;
-    closestHit->attributes = plane.attributes;
+    closestHit->mat = plane.mat;
 
     return true;
 }
@@ -108,7 +111,7 @@ __device__ bool triangleIntersection(const ray& ray, const triangle& triangle, i
         triangle.vertices[2] - triangle.vertices[1], 
         triangle.vertices[0] - triangle.vertices[2] 
     };
-    plane trianglePlane = { triangle.vertices[0], { edges[0], edges[1] }, triangle.attributes };
+    plane trianglePlane = { triangle.vertices[0], { edges[0], edges[1] }, triangle.mat };
 
     // Check if ray intersects with the plane spanned out by the triangle
     intersectionInfo planeInfo = {};
@@ -119,14 +122,50 @@ __device__ bool triangleIntersection(const ray& ray, const triangle& triangle, i
     }
 
     // Calculate normals of edges pointing towards the center
-    vec3d innerNormal1 = crossProduct(planeInfo.normal, edges[0]);
-    vec3d innerNormal2 = crossProduct(planeInfo.normal, edges[1]);
-    vec3d innerNormal3 = crossProduct(planeInfo.normal, edges[2]);
+    vec3d innerNormal1 = cross(planeInfo.normal, edges[0]);
+    vec3d innerNormal2 = cross(planeInfo.normal, edges[1]);
+    vec3d innerNormal3 = cross(planeInfo.normal, edges[2]);
 
     // Check if ray intersection is outside edges
-    if (dotProduct(innerNormal1, planeInfo.intersection - triangle.vertices[0]) < 0 ||
-        dotProduct(innerNormal2, planeInfo.intersection - triangle.vertices[1]) < 0 ||
-        dotProduct(innerNormal3, planeInfo.intersection - triangle.vertices[2]) < 0) {
+    if (dot(innerNormal1, planeInfo.intersection - triangle.vertices[0]) < 0 ||
+        dot(innerNormal2, planeInfo.intersection - triangle.vertices[1]) < 0 ||
+        dot(innerNormal3, planeInfo.intersection - triangle.vertices[2]) < 0) {
+        return false;
+    }
+
+    *closestHit = planeInfo;
+    return true;
+}
+
+// Same as triangle intersection but with one extra side to check if the intersection is inside of
+__device__ bool quadIntersection(const ray& ray, const quad& quad, intersectionInfo* closestHit) {
+    vec3d edges[4] = { // All edges pointing in a roundabout
+        quad.vertices[1] - quad.vertices[0],
+        quad.vertices[2] - quad.vertices[1],
+        quad.vertices[3] - quad.vertices[2],
+        quad.vertices[0] - quad.vertices[3]
+    };
+    plane quadPlane = { quad.vertices[0], { edges[0], edges[1] }, quad.mat };
+
+    // Check if ray intersects with the plane spanned out by the triangle
+    intersectionInfo planeInfo = {};
+    bool intersectedPlane = planeIntersection(ray, quadPlane, &planeInfo);
+
+    if (!intersectedPlane || planeInfo.distance <= nearZero || planeInfo.distance > closestHit->distance) {
+        return false;
+    }
+
+    // Calculate normals of edges pointing towards the center
+    vec3d innerNormal1 = cross(planeInfo.normal, edges[0]);
+    vec3d innerNormal2 = cross(planeInfo.normal, edges[1]);
+    vec3d innerNormal3 = cross(planeInfo.normal, edges[2]);
+    vec3d innerNormal4 = cross(planeInfo.normal, edges[3]);
+
+    // Check if ray intersection is outside edges
+    if (dot(innerNormal1, planeInfo.intersection - quad.vertices[0]) < 0 ||
+        dot(innerNormal2, planeInfo.intersection - quad.vertices[1]) < 0 ||
+        dot(innerNormal3, planeInfo.intersection - quad.vertices[2]) < 0 ||
+        dot(innerNormal4, planeInfo.intersection - quad.vertices[3]) < 0) {
         return false;
     }
 

@@ -20,12 +20,13 @@
 
 // Only works with 16:9 aspect ratios, such as:
 // 640x360, 960x540, 1280x720, 1920x1080, 2560x1440
-constexpr int windowWidth = 1280;
-constexpr int windowHeight = 720;
+constexpr int windowWidth = 1920;
+constexpr int windowHeight = 1080;
 constexpr bool fullscreen = false;
 constexpr int maxBounces = 5;
-constexpr int samplesPerPixel = 2;
+constexpr int samplesPerPixel = 1;
 constexpr color backgroundColor = { 0, 0, 0 };
+constexpr float specularChance = 0.5f; // Chance of ray reflecting with specular BRDF
 
 unsigned int screenTexture;
 cudaGraphicsResource_t cudaImage; // Must be global
@@ -37,34 +38,53 @@ cudaGraphicsResource_t cudaImage; // Must be global
 scene allocateScene() {
     camera camera = { { 0, 1, 0 }, { 0, 0 } , PI / 2 };
 
-    // material = albedo, emittance, reflectivity
+    // material = albedo, emittance, roughness, refractiveIndex
     sphere hSpheres[] = {
         // Position, radius, material
-        { { -6, 3, -4 }, 1, { { 1, 0.6, 0.2 }, 20, 0 } }, // Orange light left
-        { { 6, 3, -4 }, 1, { { 1, 0.2, 0.6 }, 20, 0 } }, // Purple light right
-        { { -0.5, 0.2, -3 }, 0.2, { { 0.2, 0.8, 0.2 }, 5, 0 } }, // Green light center
+        { { -6, 3, -4 }, 1, { { 1, 0.6, 0.2 }, 20 } }, // Orange light left
+        { { 6, 3, -4 }, 1, { { 1, 0.2, 0.6 }, 20 } }, // Purple light right
+        { { -0.5, 0.2, -3 }, 0.2, { { 0.2, 0.8, 0.2 }, 5 } }, // Green light center
 
-        { { 0, 0.75, -4 }, 0.75, { { 1, 1, 1 }, 0, 1 } }, // Center white
+        { { 0, 0.75, -4 }, 0.75, { { 1, 1, 1 }, 0, 0.001f, 10 } }, // Center white
         { { -4, 1, -6 }, 1, { { 0.2, 0, 0.8 }, 0, 1 } }, // Left purple
         { { 4, 2, -8 }, 2, { { 1, 0.1, 0 }, 0, 1 } }, // Right red
     };
     int sphereCount = sizeof(hSpheres) / sizeof(sphere);
 
     plane hPlanes[] = {
-        // Origin,      directions,                     material
-        { { 0, 0, 0 }, { { 0, 0, 1 }, { 1, 0, 0 } }, { { 0.5, 0.5, 0.5 }, 0, 0 } },
+        // Origin      directions                     material
+        { { 0, 0, 0 }, { { 0, 0, 1 }, { 1, 0, 0 } }, { { 0.5, 0.5, 0.5 } } },
     };
     int planeCount = sizeof(hPlanes) / sizeof(plane);
 
     triangle hTriangles[] = {
-        // Vertices,                                    material
+        // Vertices                                            material
         // Pyramid
-        { { { -2, 0, -3 }, { -1, 0, -3 }, { -1.5, 1, -3.5 } }, { { 0.95, 0.9, 0.2 }, 0, 0 } }, // front
-        { { { -1, 0, -4 }, { -2, 0, -4 }, { -1.5, 1, -3.5 } }, { { 0.95, 0.9, 0.2 }, 0, 0 } }, // back
-        { { { -2, 0, -4 }, { -2, 0, -3 }, { -1.5, 1, -3.5 } }, { { 0.95, 0.9, 0.2 }, 0, 0 } }, // left
-        { { { -1, 0, -3 }, { -1, 0, -4 }, { -1.5, 1, -3.5 } }, { { 0.95, 0.9, 0.2 }, 0, 0 } }, // right
+        { { { -2, 0, -3 }, { -1, 0, -3 }, { -1.5, 1, -3.5 } }, { { 0.95, 0.9, 0.2 } } }, // front
+        { { { -1, 0, -4 }, { -2, 0, -4 }, { -1.5, 1, -3.5 } }, { { 0.95, 0.9, 0.2 } } }, // back
+        { { { -2, 0, -4 }, { -2, 0, -3 }, { -1.5, 1, -3.5 } }, { { 0.95, 0.9, 0.2 } } }, // left
+        { { { -1, 0, -3 }, { -1, 0, -4 }, { -1.5, 1, -3.5 } }, { { 0.95, 0.9, 0.2 } } }, // right
     };
     int triangleCount = sizeof(hTriangles) / sizeof(triangle);
+
+    int wallWidth = 10;
+    //quad hQuads[] = {
+    //    // Vertices,                                                                                                                                      material
+    //    // Walls
+    //    //{ { { -wallWidth, 0, -wallWidth }, { -wallWidth, wallWidth, -wallWidth }, { -wallWidth, wallWidth, 0 },          { -wallWidth, 0, 0 } },          { { 0.95, 0.9, 0.2 } } }, // left
+    //    //{ { { wallWidth, 0, -wallWidth },  { wallWidth, wallWidth, -wallWidth },  { -wallWidth, wallWidth, -wallWidth }, { -wallWidth, 0, -wallWidth } }, { { 0, 0, 1 } } }, // back
+    //    //{ { { wallWidth, 0, 0 },           { wallWidth, wallWidth, 0 },           { wallWidth, wallWidth, -wallWidth },  { wallWidth, 0, -wallWidth } },  { { 0.95, 0.9, 0.2 } } }, // right
+    //    //{ { { -wallWidth, wallWidth, 0 },  { -wallWidth, wallWidth, -wallWidth }, { wallWidth, wallWidth, -wallWidth },  { wallWidth, wallWidth, 0 } },   { { 0.95, 0.9, 0.2 } } }, // top
+
+    //    // Mirror
+    //    { { { wallWidth, 0, -wallWidth },  { wallWidth, wallWidth, -wallWidth },  { -wallWidth, wallWidth, -wallWidth }, { -wallWidth, 0, -wallWidth } },                { { 1, 0.8, 0.2 }, 0, 0.005, 10 } }, // front
+    //    { { { -wallWidth, 0, -wallWidth - 1 }, { -wallWidth, wallWidth, -wallWidth - 1 }, { wallWidth, wallWidth, -wallWidth - 1 },  { wallWidth, 0, -wallWidth - 1 } }, { { 1, 0.8, 0.2 }, 0, 0.005, 10 } }, // back
+    //    { { { -wallWidth, 0, -wallWidth }, { -wallWidth, wallWidth, -wallWidth }, { -wallWidth, wallWidth, -wallWidth-1 },  { -wallWidth, 0, -wallWidth-1 } },           { { 1, 0.8, 0.2 }, 0, 0.005, 10 } }, // left
+    //    { { { wallWidth, 0, -wallWidth - 1 }, { wallWidth, wallWidth, -wallWidth - 1 },  { wallWidth, wallWidth, -wallWidth }, { wallWidth, 0, -wallWidth } },           { { 1, 0.8, 0.2 }, 0, 0.005, 10 } }, // right
+    //    { { { wallWidth, wallWidth, -wallWidth }, { wallWidth, wallWidth, -wallWidth - 1 },  { -wallWidth, wallWidth, -wallWidth - 1 }, { -wallWidth, wallWidth, -wallWidth } },           { { 1, 0.8, 0.2 }, 0, 0.005, 10 } }, // top
+    //};
+    //int quadCount = sizeof(hQuads) / sizeof(quad);
+    int quadCount = 0;
 
     // Allocate objects on GPU
     sphere* dSpheres;
@@ -76,51 +96,111 @@ scene allocateScene() {
     triangle* dTriangles;
     CUDA_ARR_COPY(dTriangles, hTriangles);
 
+    quad* dQuads;
+    //CUDA_ARR_COPY(dQuads, hQuads);
+
     return { 
         camera, 
         dSpheres, sphereCount, 
         dPlanes, planeCount,
-        dTriangles, triangleCount 
+        dTriangles, triangleCount,
+        dQuads, quadCount
     };
 }
 
+// Geometry term
+__device__ float shadowingMasking(vec3d direction, vec3d normal, vec3d microNormal, float roughness) {
+    //tex:$$G_1(v,m) = \chi^+(\frac{v \cdot m}{v \cdot n}) \frac{2}{1 + \sqrt{1 + \alpha_g^2 \tan^2\theta_v}}$$
+    //$$\tan^2\theta_v = \frac{\sin^2\theta_v}{\cos^2\theta_v} = \frac{1 - \cos^2\theta_v}{\cos^2\theta_v} = \frac{1 - (v \cdot n)^2}{(v \cdot n)^2} = \frac{1}{(v \cdot n)^2} - 1$$
+    float vDotN = dot(direction, normal);
+    float tanTheta = max(1.0f / (vDotN * vDotN) - 1.0f, 0.0f);
+
+    return chi(dot(direction, microNormal) / vDotN) *
+        2.0f / (1.0f + sqrtf(1.0f + roughness * roughness * tanTheta * tanTheta));
+}
+
 __device__ float fresnel(vec3d incident, vec3d normal, float refractionIndex1, float refractionIndex2) {
-    float c = dotProduct(incident, normal);
-    float gRoot = (refractionIndex2 * refractionIndex2) / (refractionIndex1 * refractionIndex1) - 1 + c * c;
+    float c = abs(dot(incident, normal));
+    //tex:$$g = \sqrt{\frac{\eta_t^2}{\eta_i^2} - 1 + c^2}$$
+    float gRoot = square(refractionIndex2) / square(refractionIndex1) - 1.0f + c * c;
 
     if (gRoot < 0) // Total internal reflection
         return 1;
     float g = sqrtf(gRoot);
 
-    return 0.5 * (g - c) * (g - c) / ((g + c) * (g + c)) *
-        (1 + (c * (g + c) - 1) * (c * (g + c) - 1) / ((c * (g - c) + 1) * (c * (g - c) + 1)));
+    //tex:$$F(i,m) = \frac{1}{2} \frac{(g-c)^2}{(g+c)^2} (1 + \frac{(c(g+c)-1)^2}{(c(g-c)+1)^2})$$
+    return 0.5f * square(g - c) / square(g + c) * (1.0f + square(c * (g + c) - 1.0f) / square(c * (g - c) + 1.0f));
 }
 
-__device__ color diffuseBRDF(vec3d incident, vec3d normal, vec3d scatterDir) {
-    vec3d halfDir = sign(dotProduct(incident, scatterDir)) * (incident + scatterDir);
+__device__ float specularWeight(vec3d incident, vec3d scatterDir, vec3d normal, vec3d microNormal, float roughness) {
+    //tex:$$weight(o) = \frac{|i \cdot m| G(i,o,m)}{|i \cdot n||m \cdot n|}$$
+    float g = shadowingMasking(incident, normal, microNormal, roughness) * shadowingMasking(scatterDir, normal, microNormal, roughness);
+
+    if (isnan(g))
+        return 1;
+
+    float denominator = abs(dot(incident, normal) * dot(microNormal, normal));
+    if (denominator == 0.0f)
+        denominator = nearZero;
+
+    return abs(dot(incident, microNormal)) * g / denominator;
+}
+
+__device__ vec3d baseAroundNormalToRegular(vec3d microNormal, vec3d normal) {
+    vec3d someDirection = { 1, 0, 0 };
+    // Switch random direction if they happen to be parallel
+    if (abs(dot(normal, someDirection)) < 1 - nearZero)
+        someDirection = { 0, 1, 0 };
+
+    vec3d tangent1 = cross(normal, someDirection);
+    vec3d tangent2 = cross(normal, tangent1);
+
+    // Use { normal, tangent1, tangent2 } as base
+    matrix3d baseChangeMatrix = {
+        {
+            { tangent1.x, tangent2.x, normal.x },
+            { tangent1.y, tangent2.y, normal.y },
+            { tangent1.z, tangent2.z, normal.z }
+        }
+    };
+    // Express vector in regular base
+    return baseChangeMatrix * microNormal;
+}
+
+__device__ vec3d genMicrofacetNormal(float roughness, curandStateXORWOW* randState) {
+    float epsilon1 = randRange(randState, 1);
+    float epsilon2 = randRange(randState, 1);
+
+    // Spherical coordinates
+    float theta = atan(roughness * sqrtf(epsilon1) / sqrtf(1 - epsilon1));
+    float phi = 2 * PI * epsilon2;
+
+    // Convert to cartesian coordinates
+    float sinTheta = sin(theta);
+    float x = sinTheta * cos(phi);
+    float y = sinTheta * sin(phi);
+    float z = cos(theta);
+
+    return { x, y, z };
 }
 
 __device__ vec3d reflect(vec3d direction, vec3d normal) {
     // direction and normal are both normalized so:
     //tex:$$proj_\vec{n}(\vec{d}) = (\vec{d} \cdot \vec{n})\vec{n}$$
-    return direction - 2 * dotProduct(direction, normal) * normal;
+    return direction - 2 * dot(direction, normal) * normal;
 }
 
 __device__ vec3d genRandomDirection(curandStateXORWOW* randState, vec3d normal) {
     vec3d randomDirection = ZERO_VEC;
     do {
-        randomDirection = {
-            float(curand(randState)) / INT_MAX - 1.0f,
-            float(curand(randState)) / INT_MAX - 1.0f,
-            float(curand(randState)) / INT_MAX - 1.0f
-        };
+        randomDirection = { randRange(randState, 2) - 1, randRange(randState, 2) - 1, randRange(randState, 2) - 1 };
     } while (length(randomDirection) > 1);
 
     randomDirection = normalize(randomDirection);
 
-    if (dotProduct(normal, randomDirection) < 0) {
+    if (dot(normal, randomDirection) < 0) {
         // Reflect to other hemisphere by subtracting twice it's projection on the normal
-        randomDirection -= 2 * dotProduct(randomDirection, normal) * normal;
+        randomDirection -= 2 * dot(randomDirection, normal) * normal;
     }
     return randomDirection;
 }
@@ -134,10 +214,10 @@ __device__ color tracePath(ray incidentRay, const scene& scene, curandStateXORWO
     intersectionInfo closestHit = {};
 
     // We want to loop the number of times that is the largest array out of all the objects
-    float largestArraySize = max(scene.sphereCount, max(scene.planeCount, scene.triangleCount));
+    float largestArraySize = max(scene.sphereCount, max(scene.planeCount, max(scene.triangleCount, scene.quadCount)));
     
     bool intersected = false;
-    // Check intersection with all objects and shade accordingly
+    // Check intersection with all objects and grab info about the closest intersection
     for (int i = 0; i < largestArraySize; i++) {
         // Check index to avoid "index out of range"
         if (i < scene.sphereCount)
@@ -148,22 +228,40 @@ __device__ color tracePath(ray incidentRay, const scene& scene, curandStateXORWO
 
         if (i < scene.triangleCount)
             intersected += triangleIntersection(incidentRay, scene.triangles[i], &closestHit);
+
+        if (i < scene.quadCount)
+            intersected += quadIntersection(incidentRay, scene.quads[i], &closestHit);
     }
 
     // If intersection was found with any of the objects shade the closest point
     if (intersected) {
-        //ray reflectionRay = { closestHit.intersection, reflect(incidentRay.direction, closestHit.normal) };
+        color emittedLight = closestHit.mat.emittance * closestHit.mat.albedo;
 
-        color emittedLight = closestHit.attributes.emittance * closestHit.attributes.albedo;
+        vec3d scatterDirection{};
+        color brdf{};
 
-        vec3d randomDirection = genRandomDirection(randState, closestHit.normal);
+        float brdfChoice = randRange(randState, 1);
 
-        //color brdf = 2.0 * closestHit.attributes.albedo;
-        color brdf = diffuseBRDF(-randomDirection, closestHit.normal, -incidentRay.direction);
+        if (brdfChoice < specularChance) {  // Dieletric BRDF
+            // Microfacet normal for importance sampling
+            vec3d microNormal = genMicrofacetNormal(closestHit.mat.roughness, randState);
+            microNormal = baseAroundNormalToRegular(microNormal, closestHit.normal);
 
-        color incomingLight = tracePath({ closestHit.intersection, randomDirection }, scene, randState, bounces + 1);
+            scatterDirection = reflect(incidentRay.direction, microNormal);
 
-        float cosAngle = dotProduct(randomDirection, closestHit.normal);
+            float fresnelTerm = fresnel(-incidentRay.direction, microNormal, 1.0f, closestHit.mat.refractiveIndex);
+            float specularTerm = specularWeight(-incidentRay.direction, scatterDirection, closestHit.normal, microNormal, closestHit.mat.roughness);
+
+            brdf = specularTerm * fresnelTerm / specularChance * vec3d{ 1, 1, 1 };
+        }
+        else { // Diffuse BRDF
+            scatterDirection = genRandomDirection(randState, closestHit.normal);
+            brdf = 2.0 / (1 - specularChance) * closestHit.mat.albedo;
+        }
+
+        color incomingLight = tracePath({ closestHit.intersection, scatterDirection }, scene, randState, bounces + 1);
+
+        float cosAngle = dot(scatterDirection, closestHit.normal);
 
         //tex:The rendering equation
         //$$L_o(\omega_o) = L_e(\omega_o) + \int_\Omega f(\omega_i, \omega_o) L_i(\omega_i) (\omega_i \cdot n) d\omega_i$$
@@ -403,6 +501,7 @@ int main() {
     cudaFree(scene.spheres);
     cudaFree(scene.planes);
     cudaFree(scene.triangles);
+    cudaFree(scene.quads);
     cudaFree(randStates);
     cudaFree(frameSum);
 

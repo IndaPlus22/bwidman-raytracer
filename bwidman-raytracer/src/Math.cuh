@@ -96,11 +96,11 @@ __device__ __host__ void operator /= (vec3d& v, const float k) {
 	v = v / k;
 }
 
-__device__ __host__ float dotProduct(const vec3d& a, const vec3d& b) {
+__device__ __host__ float dot(const vec3d& a, const vec3d& b) {
 	return a.x * b.x + a.y * b.y + a.z * b.z;
 }
 
-__device__ __host__ vec3d crossProduct(const vec3d& a, const vec3d& b) {
+__device__ __host__ vec3d cross(const vec3d& a, const vec3d& b) {
 	float i = a.y * b.z - a.z * b.y;
 	float j = -(a.x * b.z - a.z * b.x);
 	float k = a.x * b.y - a.y * b.x;
@@ -182,18 +182,18 @@ struct matrix3d {
 
 __device__ __host__ vec3d operator * (const matrix3d& a, const vec3d& x) {
 	return {
-		dotProduct(a.row(0), x),
-		dotProduct(a.row(1), x),
-		dotProduct(a.row(2), x)
+		dot(a.row(0), x),
+		dot(a.row(1), x),
+		dot(a.row(2), x)
 	};
 }
 
 __device__ __host__ matrix3d operator * (const matrix3d& a, const matrix3d& b) {
 	return {
 		{
-			{ dotProduct(a.row(0), b.col(0)), dotProduct(a.row(0), b.col(1)), dotProduct(a.row(0), b.col(2)) },
-			{ dotProduct(a.row(1), b.col(0)), dotProduct(a.row(1), b.col(1)), dotProduct(a.row(1), b.col(2)) },
-			{ dotProduct(a.row(2), b.col(0)), dotProduct(a.row(2), b.col(1)), dotProduct(a.row(2), b.col(2)) }
+			{ dot(a.row(0), b.col(0)), dot(a.row(0), b.col(1)), dot(a.row(0), b.col(2)) },
+			{ dot(a.row(1), b.col(0)), dot(a.row(1), b.col(1)), dot(a.row(1), b.col(2)) },
+			{ dot(a.row(2), b.col(0)), dot(a.row(2), b.col(1)), dot(a.row(2), b.col(2)) }
 		}
 	};
 }
@@ -261,9 +261,27 @@ __device__ color acesToneMapping(color color) {
 	return clamp(color * (a * color + b) / (color * (c * color + d) + e), 1.0f);
 }
 
+
 //
 // Miscellaneous
 //
-__device__ int sign(float x) {
-	return x / abs(x);
+
+__device__ float sign(float x) {
+	return (x < 0) ? -1 : 1;
+}
+
+__device__ float chi(float x) {
+	return (x > 0) ? 1 : 0;
+}
+
+__device__ float randRange(curandStateXORWOW* randState, float max) {
+	return float(curand(randState)) / INT_MAX * 0.5f * max;
+}
+
+__device__ __host__ constexpr float square(float x) {
+	return x * x;
+}
+
+__device__ __host__ float clamp(float x, float lower, float upper) {
+	return min(upper, max(x, lower));
 }
