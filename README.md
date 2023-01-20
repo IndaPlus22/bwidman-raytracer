@@ -1,5 +1,5 @@
 # bwidman-raytracer
-This is a simple ray tracing engine accelerated with the GPU via the CUDA API.
+This is a simple ""real time"" path tracing engine accelerated with the GPU via the CUDA API. There are camera controls and it will look ugly while it moves but it quickly accumulates frames after stopping.
 
 NOTE: An Nvidia GPU is required to run this!
 
